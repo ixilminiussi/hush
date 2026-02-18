@@ -3,6 +3,7 @@ import "bindless";
 
 struct PS_Input {
     float2 uv : TEXCOORD0;
+	float3 normal;
 }
 
 struct Material_Data { 
@@ -16,7 +17,7 @@ struct Material_Data {
 }
 
 struct PS_Params {
-	uint materialID;
+	uint material_id;
     Material_Data* materials;
 }
 
@@ -27,7 +28,8 @@ PixelParams<PS_Params> p;
 [shader("pixel")]
 float4 main(PS_Input input) : SV_Target0 {
 	Material_Data *materials = p.get().materials;
-	uint materialID = p.get().materialID;
+	uint material_id = p.get().material_id;
 
-	return float4(materials[materialID].albedo.Sample(materials[materialID].sampler, input.uv).rgb, 1.0);
+	float3 normal = materials[material_id].normal.Sample(materials[material_id].sampler, input.uv).rgb;
+	return float4(normal, 1.0);
 }

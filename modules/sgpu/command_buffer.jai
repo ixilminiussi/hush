@@ -196,13 +196,17 @@ gpu_set_depth_stencil_state :: (cmd: Gpu_Command_Buffer, desc: Gpu_Depth_Stencil
     if desc.depth_test != .NEVER {
         vkCmdSetDepthTestEnable(vk_cmd_buff, VK_TRUE);
         vkCmdSetDepthCompareOp(vk_cmd_buff, desc.depth_test.(VkCompareOp));
+
+		if desc.depth_bias != 0 || desc.depth_bias_slope_factor != 0 { // TODO: If you have a prepass, the second pass doesnt need to write anything but will still want depth bias enabled
+			vkCmdSetDepthBiasEnable(vk_cmd_buff, VK_TRUE); // TODO: that was forgotten
+			vkCmdSetDepthBias(vk_cmd_buff, desc.depth_bias, desc.depth_bias_clamp, desc.depth_bias_slope_factor);
+		}
     } else {
         vkCmdSetDepthTestEnable(vk_cmd_buff, VK_FALSE);
     }
 
-    if desc.depth_mode & .WRITE != 0 {
-        vkCmdSetDepthWriteEnable(vk_cmd_buff, VK_TRUE);
-        vkCmdSetDepthBias(vk_cmd_buff, desc.depth_bias, desc.depth_bias_clamp, desc.depth_bias_slope_factor);
+    if desc.depth_mode & .WRITE != 0 { 
+        vkCmdSetDepthWriteEnable(vk_cmd_buff, VK_TRUE); 
     } else {
         vkCmdSetDepthWriteEnable(vk_cmd_buff, VK_FALSE);
     }
