@@ -1058,12 +1058,19 @@ create_device :: () -> Gpu_Result {
         dynamic_rendering := VkPhysicalDeviceDynamicRenderingFeatures.{ pNext = chain, dynamicRendering = VK_TRUE };
         chain = *dynamic_rendering;
 
-        descriptor_buffer := VkPhysicalDeviceDescriptorBufferFeaturesEXT.{
-            pNext = chain,
-            descriptorBuffer = VK_TRUE,
-            // WARN: descriptorBufferImageLayoutIgnored = VK_TRUE, 
-        };
-        chain = *descriptor_buffer;
+		if is_optional_ext_supported(.DESCRIPTOR_BUFFER) {
+			descriptor_buffer := VkPhysicalDeviceDescriptorBufferFeaturesEXT.{
+				pNext = chain,
+				descriptorBuffer = VK_TRUE,
+			};
+			chain = *descriptor_buffer;
+		}
+        // descriptor_buffer := VkPhysicalDeviceDescriptorBufferFeaturesEXT.{
+        //     pNext = chain,
+        //     descriptorBuffer = VK_TRUE,
+        //     // WARN: descriptorBufferImageLayoutIgnored = VK_TRUE, 
+        // };
+        // chain = *descriptor_buffer;
 
         synchronization2 := VkPhysicalDeviceSynchronization2Features.{
             pNext = chain,

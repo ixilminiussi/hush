@@ -1,4 +1,4 @@
-#import "sgpu"(VALIDATION=true);
+#import "sgpu"(VALIDATION=true, RENDER_CAPTURE=true);
 
 Material :: #type,distinct s64;
 Texture  :: #type,distinct s64;
@@ -127,19 +127,48 @@ import_gltf :: (filepath : string) -> bool, []Mesh{
 	return true, meshes;
 }
 
-draw_mesh :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr) {
+draw_mesh_for_shadow_map :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, split : u32) {
 	mesh_data := pool_get(mesh_pool, mesh);
 
+	for primitive : mesh_data.primitives {
+		Data :: struct {
+			pointers : [2] Gpu_Ptr;
+			split_id : u32;
+		}
+		draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Data);
+		draw_cpu.* = Data.{.[primitive.vertex_gpu, frame_data], split};
+
+		Pixel_Data :: struct {
+			material   : u32;
+			materials  : Gpu_Ptr;
+			frame_data : Gpu_Ptr;
+		};
+
+		pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Pixel_Data);
+		pixel_cpu.* = Pixel_Data.{xx (primitive.material - 1), gpu_material_arena.gpu, frame_data};
+
+		if primitive.index_count == 0 {
+			gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
+		} else {
+			gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+		}
+	}
+}
+
+draw_mesh :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr) {
+	mesh_data := pool_get(mesh_pool, mesh);
+	
 	for primitive : mesh_data.primitives {
 		draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, [2] Gpu_Ptr);
 		draw_cpu.* = .[primitive.vertex_gpu, frame_data];
 
 		Material_Pair :: struct {
-			material  : u32;
-			materials : Gpu_Ptr;
+			material   : u32;
+			materials  : Gpu_Ptr;
+			frame_data : Gpu_Ptr;
 		};
 		pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Material_Pair);
-		pixel_cpu.* = Material_Pair.{xx (primitive.material - 1), gpu_material_arena.gpu};
+		pixel_cpu.* = Material_Pair.{xx (primitive.material - 1), gpu_material_arena.gpu, frame_data};
 
 		if primitive.index_count == 0 {
 			gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
@@ -180,7 +209,7 @@ Texture_Data :: struct {
 Material_Data :: struct { 
 	albedo   : u32; 
 	normal   : u32;
-	orm      : u32; // for now let's just normalize that shit, why not
+	orm      : u32; // for now let's just generalize that shit, why not
 	specular : u32;
 
 	sampler  : u32;
@@ -199,7 +228,7 @@ material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material
 
 	directory := path_strip_filename(filepath);
 
-	material_data : Material_Data;
+	material_data : Material_Data; // TODO: Make multithreaded, we already have a semaphore anyways
 	{
 		using material_data;
 
@@ -234,11 +263,14 @@ material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material
 
 	gpu_wait_semaphore(.{upload_complete_semaphore, upload_timeline_value});
 
-	pixel_cpu, material_gpu := gpu_arena_alloc(*gpu_material_arena, Material_Data);
-	pixel_cpu.* = material_data;
+	material_cpu, material_gpu := gpu_arena_alloc(*gpu_material_arena, Material_Data);
+	if material_cpu == null {
+		log("asset_manager: error allocating memory, ran out of size\n");
+		return false, 0;
+	}
+	material_cpu.* = material_data;
 
 	material := pool_add(*material_pool, material_data);
-	log("MATERIAL: %", material);
 
 	return true, material;
 }

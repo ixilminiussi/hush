@@ -177,6 +177,31 @@ gpu_barrier :: (cmd: Gpu_Command_Buffer, before: Stage, after: Stage) {
     vkCmdPipelineBarrier2(cmd_buff, *dep_info);
 }
 
+gpu_barrier_texture_to_shader_read :: (cmd: Gpu_Command_Buffer, texture: Gpu_Texture) {
+    cmd_buff := get_cmd_buff(cmd);
+    vk_image := get_vk_image(texture); // however sgpu gets the VkImage
+
+    image_barrier := VkImageMemoryBarrier2.{
+        srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+        oldLayout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        image         = vk_image,
+        subresourceRange = .{
+            aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            levelCount = VK_REMAINING_MIP_LEVELS,
+            layerCount = VK_REMAINING_ARRAY_LAYERS,
+        },
+    };
+    dep_info := VkDependencyInfo.{
+        imageMemoryBarrierCount = 1,
+        pImageMemoryBarriers    = *image_barrier,
+    };
+    vkCmdPipelineBarrier2(cmd_buff, *dep_info);
+}
+
 gpu_set_pipeline :: (cmd: Gpu_Command_Buffer, pipeline_handle: Gpu_Pipeline) -> Gpu_Result {
     vk_cmd_buff := get_cmd_buff(cmd);
     pipeline := pool_get(live_pipelines, pipeline_handle);

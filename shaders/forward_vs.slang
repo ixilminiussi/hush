@@ -1,20 +1,10 @@
 import "common";
+import "frame_data_definitions";
 
 struct VS_Output {
     float4 position : SV_POSITION;
     float2 uv       : TEXCOORD0;
-	float3 normal;
 	float3 ray;
-}
-
-struct Camera {
-	float4x4 view;
-	float4x4 projection;
-	float3   position;
-}
-
-struct Frame_Data {
-	Camera camera;
 }
 
 struct Vertex {
@@ -40,9 +30,8 @@ VS_Output main(uint vertex_id: SV_VertexID) {
 	Frame_Data *data = sp.get().frame_data;
 	Vertex vertex = sp.get().vertex_buffer[vertex_id];
 
-    output.position = mul(data->camera.projection, mul(data->camera.view, float4(vertex.position, 1.)));
-	output.uv       = vertex.uv;
-	output.normal   = vertex.normal;
-	output.ray      = data->camera.position - vertex.position;
+    output.position  = mul(data->viewport_view_projection, float4(vertex.position, 1.));
+	output.uv        = vertex.uv;
+	output.ray       = data->viewport_camera_position - vertex.position;
     return output;
 }

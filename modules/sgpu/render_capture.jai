@@ -30,7 +30,7 @@
         #if OS == .LINUX {
             #import "POSIX";
 
-            mod := dlopen("./librenderdoc.so", RTLD_NOW | RTLD_GLOBAL);
+            mod := dlopen("/home/ixilminiussi/Desktop/gamedev/renderdoc_1.42/lib/librenderdoc.so", RTLD_NOW | RTLD_GLOBAL);
             assert(mod != null);
             get_api := cast(pRENDERDOC_GetAPI)dlsym(mod, "RENDERDOC_GetAPI");
         } else {

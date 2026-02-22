@@ -54,7 +54,17 @@ public extension ImageHandle<_Texture<E, Shape, 0, 0, 0, 0, 0, 0, format>> {
     }
 }
 
+__generic<E : ITexelElement>
+public extension ImageHandle<Texture2D<E, 0, 0>> {
+    typealias TextureType = Texture2D<E, 0, 0>;
 
+    [ForceInline]
+    public float2 GetDimensions() {
+		uint width, height;
+		Instance.GetDimensions(width, height);
+		return float2(width, height);
+    }
+}
 
 public typealias TextureHandle2D<F: ITexelElement = float4> = ImageHandle<Texture2D<F>>;
 public typealias TextureHandle3D<F: ITexelElement = float4> = ImageHandle<Texture3D<F>>;

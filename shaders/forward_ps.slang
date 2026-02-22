@@ -1,9 +1,12 @@
 import "common";
 import "bindless";
+import "frame_data_definitions";
+
+static const float EPS = 0.00001;
 
 struct PS_Input {
+	float3 position : SV_POSITION;
     float2 uv : TEXCOORD0;
-	float3 normal;
 	float3 ray;
 }
 
@@ -20,6 +23,7 @@ struct Material_Data {
 struct PS_Params {
 	uint material_id;
     Material_Data* materials;
+	Frame_Data* frame_data;
 }
 
 [vk::push_constant]
@@ -28,15 +32,15 @@ PixelParams<PS_Params> p;
 
 [shader("pixel")]
 float4 main(PS_Input input) : SV_Target0 {
+	Frame_Data *frame_data   = p.get().frame_data;
 	Material_Data *materials = p.get().materials;
 	uint material_id = p.get().material_id;
 
-	// float3 light_color  = float3(0.5, 0.5, 0.3);
+	// // float3 light_color  = float3(0.5, 0.5, 0.3);
 
-	// vec3 random = getRandom();
-
+	// // vec3 random = getRandom();
 	float3 albedo   = materials[material_id].albedo.Sample(materials[material_id].sampler, input.uv).rgb;
-	return float4(albedo, 1.0);
+	// return float4(albedo, 1.0);
 	// float3 orm      = materials[material_id].orm.Sample(materials[material_id].sampler, input.uv).rgb;
 	// float occlusion = orm.r * computeSSAO(random, .1);
 	// float roughness = orm.g;
@@ -44,18 +48,37 @@ float4 main(PS_Input input) : SV_Target0 {
 
 	// float3 specular = materials[material_id].specular.Sample(materials[material_id].sampler, input.uv).rgb;
 
-	// float3 light_direction = float3(1.0, 1.0, 0.);
+	// float3 light_direction = frame_data.sun_direction;
 
-	// float3 V = -normalize(i.ray);
-	// float3 N = normalize(input.normal);
-	// float3 L = -normalize(light_direction);
-	// float3 H = normalize(V + L);
-	// float3 R = reflect(-V, N);
+	float2 resolution = frame_data.prepass.GetDimensions();
+	float2 screen_uv = input.position.xy / resolution;
 
-	// float NdotV = max(dot(N, -V), EPS);
-    // float NdotUp = saturate(dot(N, float3(0., 1., 0.)));
-    // float NdotL = max(dot(N, L), EPS);
-    // float NdotH = max(dot(N, H), 0.);
+	float3 V = -normalize(input.ray);
+	float3 N = normalize(frame_data.prepass.Sample(frame_data.sampler, screen_uv).rgb * 2.0 - 1.0);
+	// N = frame_data.prepass.Sample(frame_data.sampler, screen_uv).rgb;
+    float3 L = -normalize(frame_data.sun_direction);
+	float3 H = normalize(V + L);
+	float3 R = reflect(-V, N);
+
+	float NdotV = max(dot(N, -V), EPS);
+    float NdotUp = saturate(dot(N, float3(0., 1., 0.)));
+    float NdotL = max(dot(N, L), EPS);
+    float NdotH = max(dot(N, H), 0.);
+
+	float distance = length(input.ray);
+	float3 colors[4] = {float3(1.0, 0.0, 0.0), float3(1.0, 1.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 1.0, 1.0)};
+	float3 color = float3(0.0);
+
+	for (int i = 3; i >= 0; i --) {
+		float split = frame_data.sun_splits[i];
+
+		if (distance > split) {
+			color = colors[i];
+			return float4(NdotL * color, 1.0);
+		}
+	}
+
+	return float4(float3(NdotL), 1.0);
 
 	// 
     // float3 F = computeFresnel(metallic, albedo, NdotV, specular);

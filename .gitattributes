@@ -1,1 +1,2 @@
 assets/creature/Creature_Substance.glb filter=lfs diff=lfs merge=lfs -text
+capture.rdc filter=lfs diff=lfs merge=lfs -text

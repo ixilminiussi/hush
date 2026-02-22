@@ -31,5 +31,5 @@ float4 main(PS_Input input) : SV_Target0 {
 	uint material_id = p.get().material_id;
 
 	float3 normal = materials[material_id].normal.Sample(materials[material_id].sampler, input.uv).rgb;
-	return float4(normal, 1.0);
+	return float4(normalize(input.normal) * 0.5 + 0.5, 1.0);
 }

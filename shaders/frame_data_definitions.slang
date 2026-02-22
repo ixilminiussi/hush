@@ -1,0 +1,15 @@
+import "bindless";
+
+struct Frame_Data {
+	TextureHandle2D prepass;
+	SamplerHandle sampler;
+
+	float4x4  viewport_view_projection;
+	float3    viewport_camera_position;
+
+	float3          sun_direction;
+	float4x4        sun_view_projection[4];
+	float           sun_splits[4];
+	TextureHandle2D shadow_maps[4]; // only for AFTER shadow_map pass
+}
+
