@@ -54,13 +54,11 @@ build_cascade_splits :: (using shadow_map_camera : *Shadow_Map_Camera($N), view_
 	assert(N > 0);
 	assert(view_distance > 0);
 
-	cascade_splits[0] = near;
-
-	for i : 1..N-1 {
+	for i : 1..N {
 		p := i.(float) / N.(float);
 		log := near * pow(ratio, p);
 		uniform := near + (far - near) * p;
-		cascade_splits[i] = lambda * log + (1.0 - lambda) * uniform;
+		cascade_splits[i - 1] = lambda * log + (1.0 - lambda) * uniform;
 	}
 }
 

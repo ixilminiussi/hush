@@ -16,14 +16,25 @@ main :: () {
 
     main_queue := gpu_get_queue(.MAIN, 0);
 
+	imgui_context := ImGui.CreateContext();
+	defer ImGui.DestroyContext(imgui_context);
+
+	load_imgui_style();
+	init_imgui_arenas();
+	defer free_imgui_arenas();
+	init_imgui_pipeline();
+	defer destroy_imgui_pipeline();
+
 	// images
     depth_desc := Gpu_Depth_Stencil_Desc;
 	
 	x, y, width, height := get_dimensions(window, true);
 
+	resize_imgui_window(width, height);
+
 	_, shadow_map_texture := gpu_create_texture(.{
 		format      = .D16_UNORM,
-		usage       = .DEPTH_STENCIL_ATTACHMENT,
+		usage       = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED,
 		dimensions  = .[xx 2048, xx 2048, 1],
 		layer_count = 4
 	});
@@ -38,7 +49,7 @@ main :: () {
 
 	_, depth_texture := gpu_create_texture(.{
 		format     = .D16_UNORM,
-		usage      = .DEPTH_STENCIL_ATTACHMENT,
+		usage      = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED,
 		dimensions = .[xx width, xx height, 1]
 	});
 	depth_view := gpu_texture_view(depth_texture);
@@ -62,25 +73,25 @@ main :: () {
         blend_state = *blend_state,
     };
 
-	success, shadow_map_vertex_spv := compile_shader("shaders/shadow_map_vs.slang");
+	success, shadow_map_vertex_spv := compile_shader("shaders/shadow_map_vs.slang", "", true);
     assert(success);
-    success=, shadow_map_pixel_spv := compile_shader("shaders/shadow_map_ps.slang");
+    success=, shadow_map_pixel_spv := compile_shader("shaders/shadow_map_ps.slang", "", true);
     assert(success);
 
     shadow_map_pipeline := gpu_create_graphics_pipeline(shadow_map_vertex_spv, shadow_map_pixel_spv, raster_desc);
     defer gpu_free_pipeline(shadow_map_pipeline);
 
-	success=, prepass_vertex_spv := compile_shader("shaders/prepass_vs.slang");
+	success=, prepass_vertex_spv := compile_shader("shaders/prepass_vs.slang", "", true);
     assert(success);
-    success=, prepass_pixel_spv := compile_shader("shaders/prepass_ps.slang");
+    success=, prepass_pixel_spv := compile_shader("shaders/prepass_ps.slang", "", true);
     assert(success);
 
     prepass_pipeline := gpu_create_graphics_pipeline(prepass_vertex_spv, prepass_pixel_spv, raster_desc);
     defer gpu_free_pipeline(prepass_pipeline);
 
-	success=, forward_vertex_spv := compile_shader("shaders/forward_vs.slang");
+	success=, forward_vertex_spv := compile_shader("shaders/forward_vs.slang", "", true);
     assert(success);
-    success=, forward_pixel_spv := compile_shader("shaders/forward_ps.slang");
+    success=, forward_pixel_spv := compile_shader("shaders/forward_ps.slang", "", true);
     assert(success);
 
     forward_pipeline := gpu_create_graphics_pipeline(forward_vertex_spv, forward_pixel_spv, raster_desc);
@@ -106,7 +117,7 @@ main :: () {
 		using viewport_camera;
 		position      = .{5., 0., 0.};
 		look_at       = .{0., 0., 0.};
-		view_distance = 50;
+		view_distance = 100;
 		fov           = 30.;
 	}
 
@@ -120,8 +131,14 @@ main :: () {
 
 	log("%", shadow_map_camera.cascade_splits);
 
+	last_time := seconds_since_init();
+
     quit := false;
     while !quit {
+		new_time := seconds_since_init();
+		dt := new_time - last_time;
+		last_time = new_time;
+
         update_window_events();
         for events_this_frame {
             if it.type == .QUIT then quit = true;
@@ -133,6 +150,8 @@ main :: () {
 			gpu_free(prepass_texture);
 
 			x, y, width=, height= := get_dimensions(window, true);
+
+			resize_imgui_window(width, height);
 
 			_, depth_texture = gpu_create_texture(.{
 				format     = .D16_UNORM,
@@ -149,8 +168,6 @@ main :: () {
 			prepass_view = gpu_texture_view(prepass_texture);
 
 			update_projection(*viewport_camera, cast(float32)width / cast(float32)height);
-
-			log("%, %", width, height);
         }
 
         result=, swapchain_view := gpu_swapchain_acquire();
@@ -160,6 +177,8 @@ main :: () {
 
 		gpu_reset_arena(*frame_arena);
 		gpu_reset_arena(*draw_arena);
+
+
 
 		orbit_viewport_camera(*viewport_camera, .{0.1, 0.0}, .{0., -1., 0.});
 		update_view(*viewport_camera);
@@ -174,10 +193,11 @@ main :: () {
 			prepass = xx prepass_view;
 			sampler = xx default_sampler;
 
-			sun_direction       = shadow_map_camera.direction;
 			sun_view_projection = shadow_map_camera.view_projections;
 			sun_splits          = shadow_map_camera.cascade_splits;
 			shadow_maps         = cast,force([SHADOW_MAP_SPLIT_COUNT]u32)shadow_map_views;
+
+			sun_direction       = shadow_map_camera.direction;
 		}
 
         result=, cmd_buff := gpu_start_command_recording(main_queue);
@@ -279,6 +299,21 @@ main :: () {
 
 		// TODO: post process render
 
+		reset_imgui_arenas();
+		poll_imgui_events(window, 0.01);
+
+		ImGui.NewFrame();
+
+		ImGui.ShowDemoWindow();
+		ImGui.Begin("test");
+		ImGui.Button("test");
+		ImGui.End();
+			
+		ImGui.EndFrame();
+
+		ImGui.Render();
+		render_imgui_pass(cmd_buff, swapchain_view);
+
         gpu_submit_and_present(cmd_buff);
     }
 
@@ -294,10 +329,11 @@ Frame_Data :: struct {
 	camera_view_proj : Matrix4;
 	camera_position  : Vector3;
 
-	sun_direction       : Vector3;
 	sun_view_projection : [SHADOW_MAP_SPLIT_COUNT]Matrix4;
 	sun_splits          : [SHADOW_MAP_SPLIT_COUNT]float;
 	shadow_maps         : [SHADOW_MAP_SPLIT_COUNT]u32;
+
+	sun_direction       : Vector3;
 }
 
 SHADOW_MAP_SPLIT_COUNT :: 4;
@@ -305,5 +341,6 @@ SHADOW_MAP_SPLIT_COUNT :: 4;
 #load "utils/window.jai";
 #load "assets.jai";
 #load "camera.jai";
+#load "imgui.jai";
 
 #import "Input";

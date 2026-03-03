@@ -279,7 +279,11 @@ texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Tim
 	log("importing %...", filepath);
 
 	width, height, channels : s32;
-	pixels := stbi_load(to_c_string(filepath), *width, *height, *channels, 0);
+	pixels : *void;
+
+	assert(path_extension(filepath) == "png");
+
+	pixels = stbi_load(to_c_string(filepath), *width, *height, *channels, 0);
 	defer stbi_image_free(pixels);
 
 	if pixels == null {

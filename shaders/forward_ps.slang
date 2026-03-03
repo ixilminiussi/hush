@@ -7,7 +7,9 @@ static const float EPS = 0.00001;
 struct PS_Input {
 	float3 position : SV_POSITION;
     float2 uv : TEXCOORD0;
-	float3 ray;
+
+	float4 sm_positions[4];
+	float3 w_ray;
 }
 
 struct Material_Data { 
@@ -36,26 +38,18 @@ float4 main(PS_Input input) : SV_Target0 {
 	Material_Data *materials = p.get().materials;
 	uint material_id = p.get().material_id;
 
-	// // float3 light_color  = float3(0.5, 0.5, 0.3);
+	float3 albedo = materials[material_id].albedo.Sample(materials[material_id].sampler, input.uv).rgb;
+	float3 orm    = materials[material_id].orm.Sample(materials[material_id].sampler, input.uv).rgb;
 
-	// // vec3 random = getRandom();
-	float3 albedo   = materials[material_id].albedo.Sample(materials[material_id].sampler, input.uv).rgb;
-	// return float4(albedo, 1.0);
-	// float3 orm      = materials[material_id].orm.Sample(materials[material_id].sampler, input.uv).rgb;
-	// float occlusion = orm.r * computeSSAO(random, .1);
-	// float roughness = orm.g;
-	// float metallic  = orm.b;
-
-	// float3 specular = materials[material_id].specular.Sample(materials[material_id].sampler, input.uv).rgb;
-
-	// float3 light_direction = frame_data.sun_direction;
+	float occlusion = orm.r;
+	float roughness = orm.g;
+	float metallic  = orm.b;
 
 	float2 resolution = frame_data.prepass.GetDimensions();
 	float2 screen_uv = input.position.xy / resolution;
 
-	float3 V = -normalize(input.ray);
-	float3 N = normalize(frame_data.prepass.Sample(frame_data.sampler, screen_uv).rgb * 2.0 - 1.0);
-	// N = frame_data.prepass.Sample(frame_data.sampler, screen_uv).rgb;
+	float3 V = -normalize(input.w_ray);
+	float3 N = normalize(frame_data.prepass.Sample(frame_data.sampler, screen_uv).rgb * 2. - 1.);
     float3 L = -normalize(frame_data.sun_direction);
 	float3 H = normalize(V + L);
 	float3 R = reflect(-V, N);
@@ -65,45 +59,29 @@ float4 main(PS_Input input) : SV_Target0 {
     float NdotL = max(dot(N, L), EPS);
     float NdotH = max(dot(N, H), 0.);
 
-	float distance = length(input.ray);
-	float3 colors[4] = {float3(1.0, 0.0, 0.0), float3(1.0, 1.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 1.0, 1.0)};
-	float3 color = float3(0.0);
+	// shadow map BEGIN
+	float distance = length(input.w_ray);
 
-	for (int i = 3; i >= 0; i --) {
+	bool is_occluded;
+	float3 color;
+	// float3 colors[4] = {float3(1.0, 0.0, 0.), float3(1.0, 1.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0)};
+
+	for (int i = 0; i < 4; i ++) {
 		float split = frame_data.sun_splits[i];
 
-		if (distance > split) {
-			color = colors[i];
-			return float4(NdotL * color, 1.0);
+		if (distance < split) {
+			float3 sm_position = input.sm_positions[i].xyz / input.sm_positions[i].w;
+			float2 sm_uv       = float2(sm_position.x, -sm_position.y) * 0.5 + 0.5;
+			float  sm_depth    = frame_data.shadow_maps[i].Sample(frame_data.sampler, sm_uv).r;
+
+			is_occluded = (sm_position.z - 0.001) > sm_depth;
+			break;
 		}
 	}
+	// shadow map END
+	
+	float light = min(1. - float(is_occluded), NdotL);
 
-	return float4(float3(NdotL), 1.0);
-
-	// 
-    // float3 F = computeFresnel(metallic, albedo, NdotV, specular);
-    // float D = computeDGGX(roughness, NdotH);
-    // float G = computeGGX(roughness, NdotL, NdotV);
-
-    // float3 kS = F;
-    // float3 kD = (1. - kS) * (1. - metallic);
-
-    // float4 irradiance = getIrradiance(-N);
-
-    // float3 prefittedColor = getSky(-R, roughness).rgb;
-    // float2 brdf = texture(sNoises[1], float2(NdotV, roughness)).xy;
-    // float3 specularIBL = getSky(-R, roughness).rgb * (kS * brdf.x + brdf.y);
-    // float3 diffuseIBL = (albedo * irradiance.rgb * irradiance.a) * kD * occlusion;
-    // float3 IBLColor = specularIBL + diffuseIBL;
-
-    // // Direct lighting
-    // float3 Ld = kD * (albedo / PI) * NdotL * lightColor;
-    // float3 Ls = kS * ((D * G * F) / (4. * NdotL * NdotV)) * lightColor * NdotL;
-    // float2 randUV = texture(sNoises[0], i.uv).rg;
-    // float3 directColor = (Ld + Ls) * isOccluded(i.sc_position, randUV);
-
-    // out_color = float4(directColor + IBLColor, 1.);
-
-
-	// return float4(materials[material_id].albedo.Sample(materials[material_id].sampler, input.uv).rgb, 1.0);
+	return float4(albedo * max(light, 0.1), 1.);
 }
+

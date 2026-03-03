@@ -31,6 +31,8 @@ VS_Output main(uint vertex_id: SV_VertexID) {
 
 	int index = sp.get().shadow_map_index;
 
-    output.position = mul(data->sun_view_projection[0], float4(vertex.position, 1.));
+	float3 w_position = vertex.position;
+
+    output.position = mul(data->sun_view_projections[index], float4(w_position, 1.));
     return output;
 }
