@@ -61,38 +61,31 @@ resize_imgui_window :: (width : s32, height : s32) {
 	io.DisplaySize = .{xx width, xx height};
 }
 
-poll_imgui_events :: (window : u64, delta_time : float) {
+update_imgui_events :: (delta_time : float) {
 	io := ImGui.GetIO();
 
-	io.DeltaTime = delta_time;  
+	io.DeltaTime = delta_time;
 
-	mx, my, mouse_ok := get_mouse_pointer_position(window, false);
-	if mouse_ok {
-		io.AddMousePosEvent(io, xx mx, xx my);
-	}
-
-	// Input.update_window_events();
-
-	for Input.events_this_frame {
+	for get_frame_events() {
 		if it.type == {
-			case .KEYBOARD;
-				if it.key_code == .MOUSE_BUTTON_LEFT {
-					io.AddMouseButtonEvent(io, 0, xx it.key_pressed);
-				}
-				if it.key_code == .MOUSE_BUTTON_RIGHT {
-					io.AddMouseButtonEvent(io, 1, xx it.key_pressed);
-				}
-				if it.key_code == .MOUSE_BUTTON_MIDDLE {
-					io.AddMouseButtonEvent(io, 2, xx it.key_pressed);
-				}
-				if it.key_code == .MOUSE_WHEEL_UP {
-					io.AddMouseWheelEvent(io, -1, 0);
-				}
-				if it.key_code == .MOUSE_WHEEL_DOWN {
-					io.AddMouseWheelEvent(io, 1, 0);
-				}
+			case .SDL_MOUSEMOTION;
+				io.AddMousePosEvent(io, xx it.motion.x, xx it.motion.y);
+
+			case .SDL_MOUSEBUTTONDOWN;
+				if it.button.button == SDL.SDL_BUTTON_LEFT   then io.AddMouseButtonEvent(io, 0, true);
+				if it.button.button == SDL.SDL_BUTTON_RIGHT  then io.AddMouseButtonEvent(io, 1, true);
+				if it.button.button == SDL.SDL_BUTTON_MIDDLE then io.AddMouseButtonEvent(io, 2, true);
+
+			case .SDL_MOUSEBUTTONUP;
+				if it.button.button == SDL.SDL_BUTTON_LEFT   then io.AddMouseButtonEvent(io, 0, false);
+				if it.button.button == SDL.SDL_BUTTON_RIGHT  then io.AddMouseButtonEvent(io, 1, false);
+				if it.button.button == SDL.SDL_BUTTON_MIDDLE then io.AddMouseButtonEvent(io, 2, false);
+
+			case .SDL_MOUSEWHEEL;
+				io.AddMouseWheelEvent(io, xx it.wheel.x, xx it.wheel.y);
 		}
 	}
+	clear_frame_events();
 }
 
 init_imgui_pipeline :: () {
@@ -245,7 +238,7 @@ Icons :: #import "icons_material_symbols";
 
 #scope_file
 
-Input :: #import "Input";
+SDL :: #import "SDL";
 
 ImGui_View_Data :: struct {
 	constant_buffer_allocator : Gpu_Arena;

@@ -3,7 +3,8 @@ main :: () {
     assert(result == .SUCCESS);
     defer gpu_shutdown();
 
-    window :=  create_native_window(1280, 720, "Sample Window");
+    sdl_window, window = create_sdl_window(1280, 720, "hush");
+	defer destroy_sdl_window(sdl_window);
 
     window_type: Native_Window_Type;
     #if      OS == .WINDOWS then window_type = .WIN32;
@@ -28,7 +29,7 @@ main :: () {
 	// images
     depth_desc := Gpu_Depth_Stencil_Desc;
 	
-	x, y, width, height := get_dimensions(window, true);
+	width, height := get_sdl_window_size(sdl_window);
 
 	resize_imgui_window(width, height);
 
@@ -111,12 +112,10 @@ main :: () {
 	success=, meshes := import_gltf(tprint("%assets/Creature/Creature_Substance.gltf", #filepath));
 	assert(success);
 
-	// viewport
-	viewport_camera : Viewport_Camera;
 	{
 		using viewport_camera;
 		position      = .{5., 0., 0.};
-		look_at       = .{0., 0., 0.};
+		look_dir      = .{-1., 0., 0.};
 		view_distance = 100;
 		fov           = 30.;
 	}
@@ -129,27 +128,23 @@ main :: () {
 	};
 	build_cascade_splits(*shadow_map_camera, viewport_camera.view_distance, 0.75);
 
-	log("%", shadow_map_camera.cascade_splits);
-
 	last_time := seconds_since_init();
 
     quit := false;
     while !quit {
 		new_time := seconds_since_init();
-		dt := new_time - last_time;
+		dt : float64 = new_time - last_time;
 		last_time = new_time;
 
-        update_window_events();
-        for events_this_frame {
-            if it.type == .QUIT then quit = true;
-        }
-        if get_window_resizes().count > 0 {
+		quit=, resized := poll_events();
+
+        if resized {
             gpu_swapchain_resize();
 
 			gpu_free(depth_texture);
 			gpu_free(prepass_texture);
 
-			x, y, width=, height= := get_dimensions(window, true);
+			width=, height= := get_sdl_window_size(sdl_window);
 
 			resize_imgui_window(width, height);
 
@@ -170,6 +165,48 @@ main :: () {
 			update_projection(*viewport_camera, cast(float32)width / cast(float32)height);
         }
 
+		mouse_capture := false;
+		if is_mouse_button_down(1) {
+			mouse_capture = true;
+			capture_mouse(true);
+		} else {
+			capture_mouse(false);
+		}
+		moved, dir := mouse_moved_relative();
+		if moved && mouse_capture {
+			rotate_viewport_camera(*viewport_camera, .{dir.x, -dir.y} * cast(float32)dt, .{0., 1., 0.});
+		}
+
+		if is_key_down(SDL.SDL_SCANCODE_W) {
+			using viewport_camera;
+			position += look_dir * dt * MOVE_SPEED;
+			moved = true;
+		}
+
+		if is_key_down(SDL.SDL_SCANCODE_S) {
+			using viewport_camera;
+			position += -look_dir * dt * MOVE_SPEED;
+			moved = true;
+		}
+
+		if is_key_down(SDL.SDL_SCANCODE_D) {
+			using viewport_camera;
+			right := cross_product(UP, look_dir);
+			position += right * dt * MOVE_SPEED;
+			moved = true;
+		}
+
+		if is_key_down(SDL.SDL_SCANCODE_A) {
+			using viewport_camera;
+			right := cross_product(UP, look_dir);
+			position += -right * dt * MOVE_SPEED;
+			moved = true;
+		}
+
+		if moved {
+			update_view(*viewport_camera);
+		}
+
         result=, swapchain_view := gpu_swapchain_acquire();
         assert(result == .SUCCESS);
 
@@ -178,10 +215,6 @@ main :: () {
 		gpu_reset_arena(*frame_arena);
 		gpu_reset_arena(*draw_arena);
 
-
-
-		orbit_viewport_camera(*viewport_camera, .{0.1, 0.0}, .{0., -1., 0.});
-		update_view(*viewport_camera);
 		build_view_projections(*shadow_map_camera, viewport_camera.position);
 
 		frame_cpu, frame_gpu := gpu_arena_alloc(*frame_arena, Frame_Data);
@@ -300,14 +333,11 @@ main :: () {
 		// TODO: post process render
 
 		reset_imgui_arenas();
-		poll_imgui_events(window, 0.01);
+		update_imgui_events(0.01);
 
 		ImGui.NewFrame();
 
 		ImGui.ShowDemoWindow();
-		ImGui.Begin("test");
-		ImGui.Button("test");
-		ImGui.End();
 			
 		ImGui.EndFrame();
 
@@ -321,6 +351,20 @@ main :: () {
 }
 
 #scope_file
+
+sdl_window : *SDL.SDL_Window;
+window : u64;
+
+viewport_camera : Viewport_Camera;
+
+MOVE_SPEED :: 5;
+
+UP :: Vector3.{0., -1., 0.};
+
+move_forward  := false;
+move_backward := false;
+move_left     := false;
+move_right    := false;
 
 Frame_Data :: struct {
 	prepass : u32;
@@ -338,9 +382,10 @@ Frame_Data :: struct {
 
 SHADOW_MAP_SPLIT_COUNT :: 4;
 
-#load "utils/window.jai";
+SDL :: #import "SDL";
+
 #load "assets.jai";
 #load "camera.jai";
 #load "imgui.jai";
-
-#import "Input";
+#load "input-manager.jai";
+#load "window.jai";

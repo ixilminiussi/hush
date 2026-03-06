@@ -7,37 +7,70 @@ Viewport_Camera :: struct {
 	using camera  : Camera;
 
 	position      : Vector3;
-	look_at       : Vector3;
+	look_dir      : Vector3;
 	fov           : float;
 	view_distance : float;
 }
 
 update_view :: (using viewport_camera : *Viewport_Camera) {
-	view = make_look_at_matrix(position, look_at, .{0., -1. ,0.}, false);
+	view = make_look_at_matrix(position, position + look_dir, .{0., -1. ,0.}, false);
 }
 
 update_projection :: (using viewport_camera : *Viewport_Camera, aspect_ratio : float) {
 	projection = make_projection_matrix(fov, aspect_ratio, view_distance * NEAR_FAR_RATIO, view_distance);
 }
 
-orbit_viewport_camera :: (using viewport_camera : *Viewport_Camera, direction : Vector2, up : Vector3) {
-	true_direction := direction * VIEWPORT_SENSITIVITY;
+// orbit_viewport_camera :: (using viewport_camera : *Viewport_Camera, direction : Vector2, up : Vector3) {
+// 	true_direction := direction * VIEWPORT_SENSITIVITY;
+// 
+// 	difference := position - look_at;
+// 	normalized_difference := normalize(difference);
+// 
+// 	right   := normalize(cross(up, normalized_difference));
+// 	forward := normalize(cross(up, right));
+// 
+// 	yaw := atan2(dot(normalized_difference, right), dot(normalized_difference, forward));
+// 	pitch := asin(dot(normalized_difference, up));
+// 
+// 	yaw   += true_direction.x;
+// 	pitch += true_direction.y;
+// 
+// 	new_direction := cos(pitch) * (cos(yaw) * forward + sin(yaw) * right) + sin(pitch) * up;
+// 
+// 	position = look_at + (new_direction * length(difference));
+// }
 
-	difference := position - look_at;
-	normalized_difference := normalize(difference);
+move_viewport_camera_forward :: (using viewport_camera : *Viewport_Camera, dt : float32) {
+	position += look_dir * VIEWPORT_MOVE_SPEED * dt;
+}
 
-	right   := normalize(cross(up, normalized_difference));
-	forward := normalize(cross(up, right));
+move_viewport_camera_backward :: (using viewport_camera : *Viewport_Camera, dt : float32) {
+	position -= look_dir * VIEWPORT_MOVE_SPEED * dt;
+}
 
-	yaw := atan2(dot(normalized_difference, right), dot(normalized_difference, forward));
-	pitch := asin(dot(normalized_difference, up));
+move_viewport_camera_left :: (using viewport_camera : *Viewport_Camera, up : Vector3, dt : float32) {
+	right := normalize(cross(up, look_dir));
+	position += right * VIEWPORT_MOVE_SPEED * dt;
+}
 
-	yaw   += true_direction.x;
-	pitch += true_direction.y;
+move_viewport_camera_right :: (using viewport_camera : *Viewport_Camera, up : Vector3, dt : float32) {
+	right := normalize(cross(up, look_dir));
+	position -= right * VIEWPORT_MOVE_SPEED * dt;
+}
 
-	new_direction := cos(pitch) * (cos(yaw) * forward + sin(yaw) * right) + sin(pitch) * up;
+rotate_viewport_camera :: (using viewport_camera : *Viewport_Camera, dir : Vector2, up : Vector3) {
+	true_dir := dir * VIEWPORT_SENSITIVITY;
 
-	position = look_at + (new_direction * length(difference));
+   	right   := normalize(cross(up, look_dir));
+   	forward := normalize(cross(up, right));
+
+   	yaw := atan2(dot(look_dir, right), dot(look_dir, forward));
+   	pitch := asin(dot(look_dir, up));
+   
+   	yaw   += true_dir.x;
+   	pitch += true_dir.y;
+   
+   	look_dir = normalize(cos(pitch) * (cos(yaw) * forward + sin(yaw) * right) + sin(pitch) * up);
 }
 
 Shadow_Map_Camera :: struct ($N : u32 = 4) {
@@ -77,7 +110,8 @@ build_view_projections :: (using shadow_map_camera : *Shadow_Map_Camera($N), cen
 #scope_file 
 
 NEAR_FAR_RATIO :: 1.0 / 2000.0;
-VIEWPORT_SENSITIVITY :: 0.02;
+VIEWPORT_SENSITIVITY :: 1;
+VIEWPORT_MOVE_SPEED  :: 5.0;
 
 #import "Basic";
 #import "Math";
