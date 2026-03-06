@@ -127,7 +127,6 @@ import_gltf :: (filepath : string) -> bool, []Mesh{
 
 draw_mesh_for_shadow_map :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, split : u32) {
 	mesh_data := pool_get(mesh_pool, mesh);
-
 	for primitive : mesh_data.primitives {
 		Data :: struct {
 			pointers : [2] Gpu_Ptr;
@@ -176,6 +175,125 @@ draw_mesh :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Aren
 	}
 }
 
+texture_load_from_file_one_time :: (filepath : string, mipmaps := false) -> bool, Gpu_Texture_View {
+	log("importing %...", filepath);
+
+	img_width, img_height, channels : s32;
+	pixels := stbi_load(to_c_string(filepath), *img_width, *img_height, *channels, 0);
+	defer stbi_image_free(pixels);
+
+	if pixels == null {
+		log_error("[stbi] %\n", to_string(stbi_failure_reason()));
+		return false, 0;
+	}
+
+	format : Format;
+	if channels == {
+		case 1; format = .R8_SRGB;
+		case 2; format = .R8G8_SRGB;
+		case 3; format = .R8G8B8_SRGB;
+		case 4; format = .R8G8B8A8_SRGB;
+	};
+
+	mip_count : u8 = 1;
+	if mipmaps {
+		max_dim := max(img_width, img_height);
+		while max_dim > 1 { max_dim /= 2; mip_count += 1; }
+	}
+
+	log("texture: %x%, % channels, % mip levels\n", img_width, img_height, channels, mip_count);
+
+	_, gpu_texture := gpu_create_texture(.{
+		dimensions = .[xx img_width, xx img_height, 1],
+		format = format,
+		usage = .SAMPLED | .TRANSFER_DST,
+		mip_count = mip_count,
+	});
+
+	upload_semaphore := gpu_create_semaphore(0);
+	defer gpu_destroy_semaphore(upload_semaphore);
+
+	transfer_queue := gpu_get_queue(.MAIN, 0);
+	_, cmd_buff := gpu_start_command_recording(transfer_queue);
+
+	// upload mip 0
+	base_size := img_width * img_height * channels;
+	staging, staging_gpu := gpu_malloc(base_size);
+	memcpy(staging, pixels, base_size);
+	gpu_enqueue_destroy(cmd_buff, staging_gpu);
+	gpu_copy_to_texture(cmd_buff, gpu_texture, staging_gpu, 0);
+
+	if mipmaps {
+		// generate and upload mip levels via CPU box filter
+		prev_width  := img_width;
+		prev_height := img_height;
+		prev_data   := cast(*u8)pixels;
+
+		for mip : 1..cast(s32)mip_count-1 {
+			mip_w := max(prev_width / 2, 1);
+			mip_h := max(prev_height / 2, 1);
+			mip_size := mip_w * mip_h * channels;
+
+			mip_data := cast(*u8)alloc(mip_size);
+			defer free(mip_data);
+
+			for y : 0..mip_h-1 {
+				for x : 0..mip_w-1 {
+					sx := x * 2;
+					sy := y * 2;
+					for c : 0..channels-1 {
+						sum : s32 = 0;
+						count : s32 = 0;
+
+						if sx < prev_width && sy < prev_height {
+							sum += cast(s32) prev_data[(sy * prev_width + sx) * channels + c];
+							count += 1;
+						}
+						if sx+1 < prev_width && sy < prev_height {
+							sum += cast(s32) prev_data[(sy * prev_width + sx+1) * channels + c];
+							count += 1;
+						}
+						if sx < prev_width && sy+1 < prev_height {
+							sum += cast(s32) prev_data[((sy+1) * prev_width + sx) * channels + c];
+							count += 1;
+						}
+						if sx+1 < prev_width && sy+1 < prev_height {
+							sum += cast(s32) prev_data[((sy+1) * prev_width + sx+1) * channels + c];
+							count += 1;
+						}
+
+						mip_data[(y * mip_w + x) * channels + c] = cast(u8)(sum / count);
+					}
+				}
+			}
+
+			mip_staging, mip_staging_gpu := gpu_malloc(mip_size);
+			memcpy(mip_staging, mip_data, mip_size);
+			gpu_enqueue_destroy(cmd_buff, mip_staging_gpu);
+			gpu_copy_to_texture(cmd_buff, gpu_texture, mip_staging_gpu, xx mip);
+
+			// for next iteration, copy mip_data to a persistent buffer
+			if mip < cast(s32)mip_count-1 {
+				if prev_data != cast(*u8)pixels then free(prev_data);
+				prev_data = cast(*u8)alloc(mip_size);
+				memcpy(prev_data, mip_data, mip_size);
+			}
+
+			prev_width  = mip_w;
+			prev_height = mip_h;
+		}
+
+		if prev_data != cast(*u8)pixels then free(prev_data);
+	}
+
+	gpu_submit(cmd_buff, signals = .[.{upload_semaphore, 1}]);
+	gpu_wait_semaphore(.{upload_semaphore, 1});
+
+	gpu_view := gpu_texture_view(gpu_texture);
+
+	return true, gpu_view;
+}
+
 #scope_file
 
 gpu_arena : Gpu_Arena;
@@ -217,61 +335,6 @@ Material_Data :: struct {
 mesh_pool     : Pool(Mesh, Mesh_Data, 1024);
 material_pool : Pool(Material, Material_Data, 512);
 texture_pool  : Pool(Texture, Texture_Data, 1024);
-
-material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material) -> bool, Material {
-	upload_complete_semaphore := gpu_create_semaphore(0);
-	defer gpu_destroy_semaphore(upload_complete_semaphore);
-
-	upload_timeline_value : u64 = 0;
-
-	directory := path_strip_filename(filepath);
-
-	material_data : Material_Data; // TODO: Make multithreaded, we already have a semaphore anyways
-	{
-		using material_data;
-
-		if material_cgltf.has_pbr_metallic_roughness {
-			upload_timeline_value += 1;
-			orm_filepath := sprint("%%", directory, to_string(material_cgltf.pbr_metallic_roughness.metallic_roughness_texture.texture.image.uri));
-			success, texture := texture_load_from_file(orm_filepath, .{upload_complete_semaphore, upload_timeline_value});
-			assert(success);
-
-			orm = xx pool_get(texture_pool, texture).view;
-
-
-			upload_timeline_value += 1;
-			albedo_filepath := sprint("%%", directory, to_string(material_cgltf.pbr_metallic_roughness.base_color_texture.texture.image.uri));
-			success, texture = texture_load_from_file(albedo_filepath, .{upload_complete_semaphore, upload_timeline_value});
-			assert(success);
-
-			albedo = xx pool_get(texture_pool, texture).view;
-		}
-
-		if material_cgltf.has_specular {
-			upload_timeline_value += 1;
-			specular_filepath := sprint("%%", directory, to_string(material_cgltf.specular.specular_color_texture.texture.image.uri));
-			success, texture := texture_load_from_file(specular_filepath, .{upload_complete_semaphore, upload_timeline_value});
-			assert(success);
-
-			specular = xx pool_get(texture_pool, texture).view;
-		}
-
-		sampler = xx gpu_create_sampler(Gpu_Sampler_Desc.{}); // default sampler for now. I think it's fair to assume the material can own one sampler for all its textures
-	}
-
-	gpu_wait_semaphore(.{upload_complete_semaphore, upload_timeline_value});
-
-	material_cpu, material_gpu := gpu_arena_alloc(*gpu_material_arena, Material_Data);
-	if material_cpu == null {
-		log("asset_manager: error allocating memory, ran out of size\n");
-		return false, 0;
-	}
-	material_cpu.* = material_data;
-
-	material := pool_add(*material_pool, material_data);
-
-	return true, material;
-}
 
 texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Timeline_Pair) -> bool, Texture {
 	log("importing %...", filepath);
@@ -331,6 +394,61 @@ texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Tim
 	texture := pool_add(*texture_pool, texture_data);
 
 	return true, texture;
+}
+
+material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material) -> bool, Material {
+	upload_complete_semaphore := gpu_create_semaphore(0);
+	defer gpu_destroy_semaphore(upload_complete_semaphore);
+
+	upload_timeline_value : u64 = 0;
+
+	directory := path_strip_filename(filepath);
+
+	material_data : Material_Data; // TODO: Make multithreaded, we already have a semaphore anyways
+	{
+		using material_data;
+
+		if material_cgltf.has_pbr_metallic_roughness {
+			upload_timeline_value += 1;
+			orm_filepath := sprint("%%", directory, to_string(material_cgltf.pbr_metallic_roughness.metallic_roughness_texture.texture.image.uri));
+			success, texture := texture_load_from_file(orm_filepath, .{upload_complete_semaphore, upload_timeline_value});
+			assert(success);
+
+			orm = xx pool_get(texture_pool, texture).view;
+
+
+			upload_timeline_value += 1;
+			albedo_filepath := sprint("%%", directory, to_string(material_cgltf.pbr_metallic_roughness.base_color_texture.texture.image.uri));
+			success, texture = texture_load_from_file(albedo_filepath, .{upload_complete_semaphore, upload_timeline_value});
+			assert(success);
+
+			albedo = xx pool_get(texture_pool, texture).view;
+		}
+
+		if material_cgltf.has_specular {
+			upload_timeline_value += 1;
+			specular_filepath := sprint("%%", directory, to_string(material_cgltf.specular.specular_color_texture.texture.image.uri));
+			success, texture := texture_load_from_file(specular_filepath, .{upload_complete_semaphore, upload_timeline_value});
+			assert(success);
+
+			specular = xx pool_get(texture_pool, texture).view;
+		}
+
+		sampler = xx gpu_create_sampler(Gpu_Sampler_Desc.{}); // default sampler for now. I think it's fair to assume the material can own one sampler for all its textures
+	}
+
+	gpu_wait_semaphore(.{upload_complete_semaphore, upload_timeline_value});
+
+	material_cpu, material_gpu := gpu_arena_alloc(*gpu_material_arena, Material_Data);
+	if material_cpu == null {
+		log("asset_manager: error allocating memory, ran out of size\n");
+		return false, 0;
+	}
+	material_cpu.* = material_data;
+
+	material := pool_add(*material_pool, material_data);
+
+	return true, material;
 }
 
 result_to_string :: (result : Gpu_Result) -> string {
