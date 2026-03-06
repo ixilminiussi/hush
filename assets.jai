@@ -175,124 +175,21 @@ draw_mesh :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Aren
 	}
 }
 
-texture_load_from_file_one_time :: (filepath : string, mipmaps := false) -> bool, Gpu_Texture_View {
-	log("importing %...", filepath);
+texture_load_from_file_one_time :: (filepath : string) -> bool, Gpu_Texture_View {
+	upload_semaphore := gpu_create_semaphore(0);
 
-	img_width, img_height, channels : s32;
-	pixels := stbi_load(to_c_string(filepath), *img_width, *img_height, *channels, 0);
-	defer stbi_image_free(pixels);
+	success, texture := texture_load_from_file(filepath, .{upload_semaphore, 1});
 
-	if pixels == null {
-		log_error("[stbi] %\n", to_string(stbi_failure_reason()));
+	gpu_wait_semaphore(.{upload_semaphore, 1});
+	gpu_destroy_semaphore(upload_semaphore);
+
+	if !success {
 		return false, 0;
 	}
 
-	format : Format;
-	if channels == {
-		case 1; format = .R8_SRGB;
-		case 2; format = .R8G8_SRGB;
-		case 3; format = .R8G8B8_SRGB;
-		case 4; format = .R8G8B8A8_SRGB;
-	};
-
-	mip_count : u8 = 1;
-	if mipmaps {
-		max_dim := max(img_width, img_height);
-		while max_dim > 1 { max_dim /= 2; mip_count += 1; }
-	}
-
-	log("texture: %x%, % channels, % mip levels\n", img_width, img_height, channels, mip_count);
-
-	_, gpu_texture := gpu_create_texture(.{
-		dimensions = .[xx img_width, xx img_height, 1],
-		format = format,
-		usage = .SAMPLED | .TRANSFER_DST,
-		mip_count = mip_count,
-	});
-
-	upload_semaphore := gpu_create_semaphore(0);
-	defer gpu_destroy_semaphore(upload_semaphore);
-
-	transfer_queue := gpu_get_queue(.MAIN, 0);
-	_, cmd_buff := gpu_start_command_recording(transfer_queue);
-
-	// upload mip 0
-	base_size := img_width * img_height * channels;
-	staging, staging_gpu := gpu_malloc(base_size);
-	memcpy(staging, pixels, base_size);
-	gpu_enqueue_destroy(cmd_buff, staging_gpu);
-	gpu_copy_to_texture(cmd_buff, gpu_texture, staging_gpu, 0);
-
-	if mipmaps {
-		// generate and upload mip levels via CPU box filter
-		prev_width  := img_width;
-		prev_height := img_height;
-		prev_data   := cast(*u8)pixels;
-
-		for mip : 1..cast(s32)mip_count-1 {
-			mip_w := max(prev_width / 2, 1);
-			mip_h := max(prev_height / 2, 1);
-			mip_size := mip_w * mip_h * channels;
-
-			mip_data := cast(*u8)alloc(mip_size);
-			defer free(mip_data);
-
-			for y : 0..mip_h-1 {
-				for x : 0..mip_w-1 {
-					sx := x * 2;
-					sy := y * 2;
-					for c : 0..channels-1 {
-						sum : s32 = 0;
-						count : s32 = 0;
-
-						if sx < prev_width && sy < prev_height {
-							sum += cast(s32) prev_data[(sy * prev_width + sx) * channels + c];
-							count += 1;
-						}
-						if sx+1 < prev_width && sy < prev_height {
-							sum += cast(s32) prev_data[(sy * prev_width + sx+1) * channels + c];
-							count += 1;
-						}
-						if sx < prev_width && sy+1 < prev_height {
-							sum += cast(s32) prev_data[((sy+1) * prev_width + sx) * channels + c];
-							count += 1;
-						}
-						if sx+1 < prev_width && sy+1 < prev_height {
-							sum += cast(s32) prev_data[((sy+1) * prev_width + sx+1) * channels + c];
-							count += 1;
-						}
-
-						mip_data[(y * mip_w + x) * channels + c] = cast(u8)(sum / count);
-					}
-				}
-			}
-
-			mip_staging, mip_staging_gpu := gpu_malloc(mip_size);
-			memcpy(mip_staging, mip_data, mip_size);
-			gpu_enqueue_destroy(cmd_buff, mip_staging_gpu);
-			gpu_copy_to_texture(cmd_buff, gpu_texture, mip_staging_gpu, xx mip);
-
-			// for next iteration, copy mip_data to a persistent buffer
-			if mip < cast(s32)mip_count-1 {
-				if prev_data != cast(*u8)pixels then free(prev_data);
-				prev_data = cast(*u8)alloc(mip_size);
-				memcpy(prev_data, mip_data, mip_size);
-			}
-
-			prev_width  = mip_w;
-			prev_height = mip_h;
-		}
-
-		if prev_data != cast(*u8)pixels then free(prev_data);
-	}
-
-	gpu_submit(cmd_buff, signals = .[.{upload_semaphore, 1}]);
-	gpu_wait_semaphore(.{upload_semaphore, 1});
-
-	gpu_view := gpu_texture_view(gpu_texture);
-
-	return true, gpu_view;
+	return true, pool_get(texture_pool, texture).view;
 }
+
 
 #scope_file
 
