@@ -48,7 +48,6 @@ get_sdl_window_size :: (sdl_window: *SDL.SDL_Window) -> s32, s32 {
 
 #scope_file
 
-SDL :: #import "SDL";
 #if OS == .LINUX {
 	X11 :: #import "X11";
 	using X11;

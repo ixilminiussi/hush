@@ -1,5 +1,3 @@
-#import "sgpu"(VALIDATION=true, RENDER_CAPTURE=true);
-
 Material :: #type,distinct s64;
 Texture  :: #type,distinct s64;
 Mesh     :: #type,distinct s64;

@@ -366,9 +366,6 @@ swapchain_format: VkSurfaceFormatKHR;
 
 vk_swapchain: VkSwapchainKHR;
 
-// #todo: expose this to the module parameters?
-MAX_FRAMES_IN_FLIGHT :: 3;
-
 acquire_semaphores: [MAX_FRAMES_IN_FLIGHT] VkSemaphore;
 present_semaphores: [MAX_FRAMES_IN_FLIGHT] VkSemaphore;
 

@@ -99,11 +99,23 @@ main :: () {
     defer gpu_free_pipeline(forward_pipeline);
 
 	// arenas
-	frame_arena := gpu_make_arena(512);
-    defer gpu_free_arena(frame_arena);
+	frame_arenas : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
+	draw_arenas  : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
+	frame_index := 0;
 
-    draw_arena := gpu_make_arena(4096);
-	defer gpu_free_arena(draw_arena);
+	for *frame_arenas {
+		it.* = gpu_make_arena(512);
+	}
+	defer for *frame_arenas {
+		gpu_free_arena(it.*);
+	}
+
+	for *draw_arenas {
+		it.* = gpu_make_arena(4096);
+	}
+	defer for *draw_arenas {
+		gpu_free_arena(it.*);
+	}
 
 	asset_manager_initialize();
 	defer asset_manager_free();
@@ -166,7 +178,7 @@ main :: () {
         }
 
 		mouse_capture := false;
-		if is_mouse_button_down(1) {
+		if is_mouse_button_down(1) && !ImGui.GetIO().WantCaptureMouse {
 			mouse_capture = true;
 			capture_mouse(true);
 		} else {
@@ -212,12 +224,13 @@ main :: () {
 
 		if !swapchain_view then continue;
 
-		gpu_reset_arena(*frame_arena);
-		gpu_reset_arena(*draw_arena);
+		// TODO: Add triple buffer
+		gpu_reset_arena(*frame_arenas[frame_index]);
+		gpu_reset_arena(*draw_arenas[frame_index]);
 
 		build_view_projections(*shadow_map_camera, viewport_camera.position);
 
-		frame_cpu, frame_gpu := gpu_arena_alloc(*frame_arena, Frame_Data);
+		frame_cpu, frame_gpu := gpu_arena_alloc(*frame_arenas[frame_index], Frame_Data);
 		{
 			using frame_cpu;
 			camera_view_proj = viewport_camera.camera.projection * viewport_camera.camera.view;
@@ -256,7 +269,7 @@ main :: () {
 			gpu_set_pipeline(cmd_buff, shadow_map_pipeline);
 
 			for mesh : meshes {
-				draw_mesh_for_shadow_map(cmd_buff, mesh, *draw_arena, frame_gpu, xx i);
+				draw_mesh_for_shadow_map(cmd_buff, mesh, *draw_arenas[frame_index], frame_gpu, xx i);
 			}
 
 			gpu_end_render_pass(cmd_buff);
@@ -290,7 +303,7 @@ main :: () {
 		gpu_set_pipeline(cmd_buff, prepass_pipeline);
 
 		for mesh : meshes {
-			draw_mesh(cmd_buff, mesh, *draw_arena, frame_gpu);
+			draw_mesh(cmd_buff, mesh, *draw_arenas[frame_index], frame_gpu);
 		}
 
 		gpu_end_render_pass(cmd_buff);
@@ -325,7 +338,7 @@ main :: () {
 		gpu_set_pipeline(cmd_buff, forward_pipeline);
 
 		for mesh : meshes {
-			draw_mesh(cmd_buff, mesh, *draw_arena, frame_gpu);
+			draw_mesh(cmd_buff, mesh, *draw_arenas[frame_index], frame_gpu);
 		}
 
 		gpu_end_render_pass(cmd_buff);
@@ -333,7 +346,7 @@ main :: () {
 		// TODO: post process render
 
 		reset_imgui_arenas();
-		update_imgui_events(0.01);
+		update_imgui_events(xx dt);
 
 		ImGui.NewFrame();
 
@@ -345,6 +358,8 @@ main :: () {
 		render_imgui_pass(cmd_buff, swapchain_view);
 
         gpu_submit_and_present(cmd_buff);
+
+		frame_index = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     gpu_wait_idle();
@@ -382,10 +397,15 @@ Frame_Data :: struct {
 
 SHADOW_MAP_SPLIT_COUNT :: 4;
 
-SDL :: #import "SDL";
-
 #load "assets.jai";
 #load "camera.jai";
 #load "imgui.jai";
 #load "input-manager.jai";
 #load "window.jai";
+
+#scope_module 
+
+MAX_FRAMES_IN_FLIGHT :: 3;
+
+SDL :: #import "SDL";
+#import "sgpu"(VALIDATION=true, RENDER_CAPTURE=true, MAX_FRAMES_IN_FLIGHT=MAX_FRAMES_IN_FLIGHT);

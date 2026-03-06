@@ -6,7 +6,9 @@
     // Optionally includes an api for taking render doc captures
     RENDER_CAPTURE := false,
     // Optionally includes a slang shader compiler submodule
-    SLANG_COMPILER := true
+    SLANG_COMPILER := true,
+	// Optionally changes the Frames in flight target
+	MAX_FRAMES_IN_FLIGHT := 3
 );
 
 Gpu_Pipeline :: #type,distinct s64;
