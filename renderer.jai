@@ -99,22 +99,21 @@ main :: () {
     defer gpu_free_pipeline(forward_pipeline);
 
 	// arenas
-	frame_arenas : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
-	draw_arenas  : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
+	frame_arenas    : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
+	draw_arenas     : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
+	frame_timelines : [MAX_FRAMES_IN_FLIGHT]Gpu_Timeline_Pair;
+
 	frame_index := 0;
 
-	for *frame_arenas {
-		it.* = gpu_make_arena(512);
+	for 0..MAX_FRAMES_IN_FLIGHT-1 {
+		frame_arenas[it]    = gpu_make_arena(512);
+		draw_arenas[it]     = gpu_make_arena(4096);
+		frame_timelines[it] = .{gpu_create_semaphore(0), 0};
 	}
-	defer for *frame_arenas {
-		gpu_free_arena(it.*);
-	}
-
-	for *draw_arenas {
-		it.* = gpu_make_arena(4096);
-	}
-	defer for *draw_arenas {
-		gpu_free_arena(it.*);
+	defer for 0..MAX_FRAMES_IN_FLIGHT-1 {
+		gpu_free_arena(frame_arenas[it]);
+		gpu_free_arena(draw_arenas[it]);
+		gpu_destroy_semaphore(frame_timelines[it].semaphore);
 	}
 
 	asset_manager_initialize();
@@ -224,7 +223,9 @@ main :: () {
 
 		if !swapchain_view then continue;
 
-		// TODO: Add triple buffer
+		gpu_wait_semaphore(frame_timelines[frame_index]);
+		frame_timelines[frame_index].value += 1;
+
 		gpu_reset_arena(*frame_arenas[frame_index]);
 		gpu_reset_arena(*draw_arenas[frame_index]);
 
@@ -357,7 +358,7 @@ main :: () {
 		ImGui.Render();
 		render_imgui_pass(cmd_buff, swapchain_view);
 
-        gpu_submit_and_present(cmd_buff);
+        gpu_submit_and_present(cmd_buff, .[frame_timelines[frame_index]]);
 
 		frame_index = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
     }
