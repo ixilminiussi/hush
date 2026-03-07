@@ -82,10 +82,10 @@ main :: () {
     shadow_map_pipeline := gpu_create_graphics_pipeline(shadow_map_vertex_spv, shadow_map_pixel_spv, raster_desc);
     defer gpu_free_pipeline(shadow_map_pipeline);
 
-	success=, terrain_vertex_spv := compile_shader("shaders/terrain_vs.slang", "", true);
-    assert(success);
-    success=, terrain_pixel_spv := compile_shader("shaders/terrain_ps.slang", "", true);
-    assert(success);
+	// success=, terrain_vertex_spv := compile_shader("shaders/terrain_vs.slang", "", true);
+    // assert(success);
+    // success=, terrain_pixel_spv := compile_shader("shaders/terrain_ps.slang", "", true);
+    // assert(success);
 
 	success=, prepass_vertex_spv := compile_shader("shaders/prepass_vs.slang", "", true);
     assert(success);
@@ -103,8 +103,8 @@ main :: () {
     forward_pipeline := gpu_create_graphics_pipeline(forward_vertex_spv, forward_pixel_spv, raster_desc);
     defer gpu_free_pipeline(forward_pipeline);
 
-    terrain_pipeline := gpu_create_graphics_pipeline(terrain_vertex_spv, terrain_pixel_spv, raster_desc);
-    defer gpu_free_pipeline(terrain_pipeline);
+    // terrain_pipeline := gpu_create_graphics_pipeline(terrain_vertex_spv, terrain_pixel_spv, raster_desc);
+    // defer gpu_free_pipeline(terrain_pipeline);
 
 	// arenas
 	frame_arenas    : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
@@ -127,29 +127,25 @@ main :: () {
 	asset_manager_initialize();
 	defer asset_manager_free();
 
-	// model
-	success=, meshes := import_gltf(tprint("%assets/Creature/Creature_Substance.gltf", #filepath));
+	// asset gym
+	success=, gym_scene := import_gltf(tprint("%assets/Creature/Creature_Substance.gltf", #filepath));
 	assert(success);
 
-	// terrain
-	terrain_resolution : [2]s32 = .[256, 256];
-	terrain_chunks : [2]s32 = .[8, 8];
-	terrain_scale : float32 = 400.0;
-	terrain_height_scale : float32 = 20.0;
-	terrain_y_offset : float32 = 5.0;
-	terrain_lod_levels : s32 = 4;
-	terrain_lod_distance : float32 = 200.0;
-	terrain_debug_view : s32 = 0; // 0=normal, 1=LOD, 2=wireframe
+	// world scene (empty by default)
+	world_scene := create_node(0);
 
-	success=, heightmap_view := texture_load_from_file_one_time(tprint("%assets/terrain/heightmap.png", #filepath));
-	success=, diffuse_view := texture_load_from_file_one_time(tprint("%assets/terrain/diffuse.png", #filepath));
+	active_scene := world_scene;
+	show_gym := false;
+	view_mode : s32 = 0;
+	view_mode_names :: string.["Shaded", "Albedo", "Normal", "CSM"];
+	current_view_label := view_mode_names[0];
 
 	// viewport
 	{
 		using viewport_camera;
 		position      = .{0., 5., 0.};
 		look_dir      = .{0.5, 0.5, 0.5};
-		view_distance = 1000;
+		view_distance = 200;
 		fov           = 30.;
 	}
 
@@ -159,7 +155,7 @@ main :: () {
 	shadow_map_camera : Shadow_Map_Camera(SHADOW_MAP_SPLIT_COUNT) = {
 		direction = normalize(Vector3.{1.0, -0.5, -0.3})
 	};
-	build_cascade_splits(*shadow_map_camera, viewport_camera.view_distance, 0.75);
+	build_cascade_splits(*shadow_map_camera, viewport_camera.view_distance, 0.9);
 
 	last_time := seconds_since_init();
 
@@ -255,6 +251,8 @@ main :: () {
 
 		frame_cpu, frame_gpu := gpu_arena_alloc(*frame_arenas[frame_index], Frame_Data);
 		{
+			frame_cpu.view_mode           = view_mode;
+
 			using frame_cpu;
 			camera_view_proj = viewport_camera.camera.projection * viewport_camera.camera.view;
 			camera_position  = viewport_camera.position;
@@ -291,9 +289,7 @@ main :: () {
 
 			gpu_set_pipeline(cmd_buff, shadow_map_pipeline);
 
-			for mesh : meshes {
-				draw_mesh_for_shadow_map(cmd_buff, mesh, *draw_arenas[frame_index], frame_gpu, xx i);
-			}
+			draw_node_for_shadow_map(cmd_buff, active_scene, *draw_arenas[frame_index], frame_gpu, xx i);
 
 			gpu_end_render_pass(cmd_buff);
 		}
@@ -325,9 +321,7 @@ main :: () {
 
 		gpu_set_pipeline(cmd_buff, prepass_pipeline);
 
-		for mesh : meshes {
-			draw_mesh(cmd_buff, mesh, *draw_arenas[frame_index], frame_gpu);
-		}
+		draw_node(cmd_buff, active_scene, *draw_arenas[frame_index], frame_gpu);
 
 		gpu_end_render_pass(cmd_buff);
 
@@ -360,65 +354,63 @@ main :: () {
 
 		gpu_set_pipeline(cmd_buff, forward_pipeline);
 
-		for mesh : meshes {
-		draw_mesh(cmd_buff, mesh, *draw_arenas[frame_index], frame_gpu);
-		}
+		draw_node(cmd_buff, active_scene, *draw_arenas[frame_index], frame_gpu);
 
-		gpu_set_pipeline(cmd_buff, terrain_pipeline);
-
-		Terrain_Data :: struct {
-			frame_data    : Gpu_Ptr;
-			heightmap     : u32;
-			diffuse       : u32;
-			sampler       : u32;
-			resolution_x  : s32;
-			resolution_y  : s32;
-			chunks_x      : s32;
-			chunks_y      : s32;
-			chunk_x       : s32;
-			chunk_y       : s32;
-			lod           : s32;
-			debug_view    : s32;
-			scale         : float32;
-			height_scale  : float32;
-			y_offset      : float32;
-		}
-
-		chunk_res_x := terrain_resolution[0] / terrain_chunks[0];
-		chunk_res_y := terrain_resolution[1] / terrain_chunks[1];
-
-		for cy : 0..terrain_chunks[1]-1 {
-			for cx : 0..terrain_chunks[0]-1 {
-				// compute chunk center in world space for LOD
-				chunk_cx := ((cast(float32)cx + 0.5) / cast(float32)terrain_chunks[0] - 0.5) * terrain_scale;
-				chunk_cy := ((cast(float32)cy + 0.5) / cast(float32)terrain_chunks[1] - 0.5) * terrain_scale;
-				dx := viewport_camera.position.x - chunk_cx;
-				dy := viewport_camera.position.z - chunk_cy;
-				dist := sqrt(dx*dx + dy*dy);
-
-				lod : s32 = cast(s32)(dist / terrain_lod_distance * cast(float32)terrain_lod_levels);
-				if lod >= terrain_lod_levels then lod = terrain_lod_levels - 1;
-				if lod < 0 then lod = 0;
-
-				step : s32 = 1;
-				for 0..lod-1  step *= 2;
-				lod_res_x := (chunk_res_x - 1) / step + 1;
-				lod_res_y := (chunk_res_y - 1) / step + 1;
-				lod_vertex_count := (lod_res_x - 1) * (lod_res_y - 1) * 6;
-
-				terrain_cpu, terrain_gpu := gpu_arena_alloc(*draw_arenas[frame_index], Terrain_Data);
-				terrain_cpu.* = .{frame_gpu, xx heightmap_view, xx diffuse_view, xx default_sampler, chunk_res_x, chunk_res_y, terrain_chunks[0], terrain_chunks[1], cx, cy, lod, terrain_debug_view, terrain_scale, terrain_height_scale, terrain_y_offset};
-
-				Terrain_PS_Data :: struct {
-					diffuse : u32;
-					sampler : u32;
-				}
-				terrain_ps_cpu, terrain_ps_gpu := gpu_arena_alloc(*draw_arenas[frame_index], Terrain_PS_Data);
-				terrain_ps_cpu.* = .{xx diffuse_view, xx default_sampler};
-
-				gpu_draw_instanced(cmd_buff, terrain_gpu, terrain_ps_gpu, xx lod_vertex_count, 1);
-			}
-		}
+		// gpu_set_pipeline(cmd_buff, terrain_pipeline);
+		//
+		// Terrain_Data :: struct {
+		// 	frame_data    : Gpu_Ptr;
+		// 	heightmap     : u32;
+		// 	diffuse       : u32;
+		// 	sampler       : u32;
+		// 	resolution_x  : s32;
+		// 	resolution_y  : s32;
+		// 	chunks_x      : s32;
+		// 	chunks_y      : s32;
+		// 	chunk_x       : s32;
+		// 	chunk_y       : s32;
+		// 	lod           : s32;
+		// 	debug_view    : s32;
+		// 	scale         : float32;
+		// 	height_scale  : float32;
+		// 	y_offset      : float32;
+		// }
+		//
+		// chunk_res_x := terrain_resolution[0] / terrain_chunks[0];
+		// chunk_res_y := terrain_resolution[1] / terrain_chunks[1];
+		//
+		// for cy : 0..terrain_chunks[1]-1 {
+		// 	for cx : 0..terrain_chunks[0]-1 {
+		// 		// compute chunk center in world space for LOD
+		// 		chunk_cx := ((cast(float32)cx + 0.5) / cast(float32)terrain_chunks[0] - 0.5) * terrain_scale;
+		// 		chunk_cy := ((cast(float32)cy + 0.5) / cast(float32)terrain_chunks[1] - 0.5) * terrain_scale;
+		// 		dx := viewport_camera.position.x - chunk_cx;
+		// 		dy := viewport_camera.position.z - chunk_cy;
+		// 		dist := sqrt(dx*dx + dy*dy);
+		//
+		// 		lod : s32 = cast(s32)(dist / terrain_lod_distance * cast(float32)terrain_lod_levels);
+		// 		if lod >= terrain_lod_levels then lod = terrain_lod_levels - 1;
+		// 		if lod < 0 then lod = 0;
+		//
+		// 		step : s32 = 1;
+		// 		for 0..lod-1  step *= 2;
+		// 		lod_res_x := (chunk_res_x - 1) / step + 1;
+		// 		lod_res_y := (chunk_res_y - 1) / step + 1;
+		// 		lod_vertex_count := (lod_res_x - 1) * (lod_res_y - 1) * 6;
+		//
+		// 		terrain_cpu, terrain_gpu := gpu_arena_alloc(*draw_arenas[frame_index], Terrain_Data);
+		// 		terrain_cpu.* = .{frame_gpu, xx heightmap_view, xx diffuse_view, xx default_sampler, chunk_res_x, chunk_res_y, terrain_chunks[0], terrain_chunks[1], cx, cy, lod, terrain_debug_view, terrain_scale, terrain_height_scale, terrain_y_offset};
+		//
+		// 		Terrain_PS_Data :: struct {
+		// 			diffuse : u32;
+		// 			sampler : u32;
+		// 		}
+		// 		terrain_ps_cpu, terrain_ps_gpu := gpu_arena_alloc(*draw_arenas[frame_index], Terrain_PS_Data);
+		// 		terrain_ps_cpu.* = .{xx diffuse_view, xx default_sampler};
+		//
+		// 		gpu_draw_instanced(cmd_buff, terrain_gpu, terrain_ps_gpu, xx lod_vertex_count, 1);
+		// 	}
+		// }
 
 		gpu_end_render_pass(cmd_buff);
 
@@ -429,23 +421,55 @@ main :: () {
 
 		ImGui.NewFrame();
 
-		if ImGui.Begin("Terrain") {
-			ImGui.SliderInt2("Resolution", *terrain_resolution, 2, 512);
-			ImGui.SliderFloat("Scale", *terrain_scale, 1.0, 500.0);
-			ImGui.SliderFloat("Height Scale", *terrain_height_scale, 0.0, 50.0);
-			ImGui.SliderFloat("Y Offset", *terrain_y_offset, -50.0, 50.0);
-			ImGui.Separator();
-			ImGui.SliderInt("LOD Levels", *terrain_lod_levels, 1, 8);
-			ImGui.SliderFloat("LOD Distance", *terrain_lod_distance, 5.0, 200.0);
+		if ImGui.BeginMainMenuBar() {
+			avail := ImGui.GetContentRegionAvail().x;
+			ImGui.SetCursorPosX(avail - 80);
+			if ImGui.BeginMenu(to_c_string(current_view_label)) {
+				for i : 0..view_mode_names.count-1 {
+					if ImGui.MenuItem(to_c_string(view_mode_names[i]), selected = view_mode == xx i) {
+						view_mode = xx i;
+						current_view_label = view_mode_names[i];
+					}
+				}
+				ImGui.EndMenu();
+			}
+			ImGui.EndMainMenuBar();
 		}
-		ImGui.End();
 
-		if ImGui.Begin("Debug View") {
-			ImGui.RadioButton("Normal", *terrain_debug_view, 0);
-			ImGui.SameLine();
-			ImGui.RadioButton("LOD", *terrain_debug_view, 1);
-			ImGui.SameLine();
-			ImGui.RadioButton("Wireframe", *terrain_debug_view, 2);
+		// if ImGui.Begin("Terrain") {
+		// 	ImGui.SliderInt2("Resolution", *terrain_resolution, 2, 512);
+		// 	ImGui.SliderFloat("Scale", *terrain_scale, 1.0, 500.0);
+		// 	ImGui.SliderFloat("Height Scale", *terrain_height_scale, 0.0, 50.0);
+		// 	ImGui.SliderFloat("Y Offset", *terrain_y_offset, -50.0, 50.0);
+		// 	ImGui.Separator();
+		// 	ImGui.SliderInt("LOD Levels", *terrain_lod_levels, 1, 8);
+		// 	ImGui.SliderFloat("LOD Distance", *terrain_lod_distance, 5.0, 200.0);
+		// }
+		// ImGui.End();
+		//
+		// if ImGui.Begin("Debug View") {
+		// 	ImGui.RadioButton("Normal", *terrain_debug_view, 0);
+		// 	ImGui.SameLine();
+		// 	ImGui.RadioButton("LOD", *terrain_debug_view, 1);
+		// 	ImGui.SameLine();
+		// 	ImGui.RadioButton("Wireframe", *terrain_debug_view, 2);
+		// }
+		// ImGui.End();
+
+		if ImGui.Begin("Scene") {
+			if show_gym {
+				if ImGui.Button("Back to World") {
+					show_gym = false;
+					active_scene = world_scene;
+				}
+				ImGui.Separator();
+				draw_scene_tree(gym_scene, 0);
+			} else {
+				if ImGui.Button("Open Asset Gym") {
+					show_gym = true;
+					active_scene = gym_scene;
+				}
+			}
 		}
 		ImGui.End();
 
@@ -490,6 +514,7 @@ Frame_Data :: struct {
 	shadow_maps         : [SHADOW_MAP_SPLIT_COUNT]u32;
 
 	sun_direction       : Vector3;
+	view_mode           : s32;
 }
 
 SHADOW_MAP_SPLIT_COUNT :: 4;

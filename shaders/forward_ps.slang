@@ -23,8 +23,7 @@ struct Material_Data {
 }
 
 struct PS_Params {
-	uint material_id;
-    Material_Data* materials;
+    Material_Data* material;
 	Frame_Data* frame_data;
 }
 
@@ -35,11 +34,10 @@ PixelParams<PS_Params> p;
 [shader("pixel")]
 float4 main(PS_Input input) : SV_Target0 {
 	Frame_Data *frame_data   = p.get().frame_data;
-	Material_Data *materials = p.get().materials;
-	uint material_id = p.get().material_id;
+	let material = p.get().material;
 
-	float3 albedo = materials[material_id].albedo.Sample(materials[material_id].sampler, input.uv).rgb;
-	float3 orm    = materials[material_id].orm.Sample(materials[material_id].sampler, input.uv).rgb;
+	float3 albedo = material.albedo.Sample(material.sampler, input.uv).rgb;
+	float3 orm    = material.orm.Sample(material.sampler, input.uv).rgb;
 
 	float occlusion = orm.r;
 	float roughness = orm.g;
@@ -81,6 +79,30 @@ float4 main(PS_Input input) : SV_Target0 {
 	// shadow map END
 	
 	float light = min(1. - float(is_occluded), NdotL);
+
+	// view modes: 0=shaded, 1=albedo, 2=mesh, 3=csm
+	if (frame_data.view_mode == 1) {
+		return float4(albedo, 1.);
+	}
+	if (frame_data.view_mode == 2) {
+		return float4(N * 0.5 + 0.5, 1.);
+	}
+	if (frame_data.view_mode == 3) {
+		float3 csm_colors[4] = {
+			float3(1.0, 0.2, 0.2),
+			float3(0.2, 1.0, 0.2),
+			float3(0.2, 0.2, 1.0),
+			float3(1.0, 1.0, 0.2)
+		};
+		float3 csm_color = float3(0.5);
+		for (int i = 0; i < 4; i++) {
+			if (distance < frame_data.sun_splits[i]) {
+				csm_color = csm_colors[i];
+				break;
+			}
+		}
+		return float4(albedo * csm_color * max(light, 0.1), 1.);
+	}
 
 	return float4(albedo * max(light, 0.1), 1.);
 }

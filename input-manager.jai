@@ -64,6 +64,11 @@ clear_frame_events :: () {
 }
 
 capture_mouse :: (capture : bool) {
+	if capture && !mouse_capture {
+		SDL.SDL_GetMouseState(*saved_mouse_x, *saved_mouse_y);
+	} else if !capture && mouse_capture {
+		SDL.SDL_WarpMouseInWindow(null, saved_mouse_x, saved_mouse_y);
+	}
 	mouse_capture = capture;
 	SDL.SDL_SetRelativeMouseMode(ifx capture then .SDL_TRUE else .SDL_FALSE);
 }
@@ -79,6 +84,8 @@ get_mouse_position :: () -> s32, s32 {
 SDL :: #import "SDL";
 
 mouse_capture      : bool;
+saved_mouse_x      : s32;
+saved_mouse_y      : s32;
 mouse_relative     : Vector2;
 mouse_absolute     : Vector2;
 mouse_has_absolute : bool;

@@ -1,6 +1,7 @@
-Material :: #type,distinct s64;
-Texture  :: #type,distinct s64;
-Mesh     :: #type,distinct s64;
+Node      :: #type,distinct s64;
+Material  :: #type,distinct s64;
+Texture   :: #type,distinct s64;
+Mesh      :: #type,distinct s64;
 
 Vertex :: struct {
 	tangent  : Vector4;
@@ -20,20 +21,18 @@ asset_manager_free :: () {
 	gpu_free_arena(gpu_material_arena);
 }
 
-import_gltf :: (filepath : string) -> bool, []Mesh{
+import_gltf :: (filepath : string) -> bool, Node {
 	log("importing %...", filepath);
-
-	meshes : [..]Mesh;
 
 	options : cgltf_options;
 	data    : *cgltf_data;
-	
+
 	result : cgltf_result;
 	result = cgltf_parse_file(*options, to_c_string(filepath), *data);
 
 	if result != .cgltf_result_success {
 		log_error("asset_manager: failed to parse %\n    -> %\n", filepath, result_to_string(result));
-		return false, meshes;
+		return false, 0;
 	}
 
 	result = cgltf_load_buffers(*options, data, to_c_string(filepath));
@@ -41,16 +40,19 @@ import_gltf :: (filepath : string) -> bool, []Mesh{
 
 	if result != .cgltf_result_success {
 		log_error("asset_manager: failed to load buffers for %\n    -> %\n", filepath, result_to_string(result));
-		return false, meshes;
-	 }
-
-	for 0..data.materials_count-1 {
+		return false, 0;
 	}
+
+	// load all meshes into the pool, indexed by their position in data.meshes
+	mesh_lookup := NewArray(cast(s64)data.meshes_count, Mesh);
+	defer free(mesh_lookup.data);
 
 	for 0..data.meshes_count-1 {
 		using mesh : Mesh_Data;
-		
+
 		mesh_cgltf := data.meshes[it];
+
+		if mesh_cgltf.name != null then mesh.name = copy_string(to_string(mesh_cgltf.name));
 
 		mesh.primitives = NewArray(cast(s64)mesh_cgltf.primitives_count, Primitive);
 
@@ -82,8 +84,8 @@ import_gltf :: (filepath : string) -> bool, []Mesh{
 						color_accessor    = attribute.data;
 					case .cgltf_attribute_type_texcoord;
 						uv_accessor       = attribute.data;
-				} 
-			} 
+				}
+			}
 
 			vertex_count = cast(u32)position_accessor.count;
 
@@ -97,7 +99,7 @@ import_gltf :: (filepath : string) -> bool, []Mesh{
 
 			if vertices.data == null || indices.data == null {
 				log("asset_manager: error allocating memory, ran out of size\n");
-				return false, meshes;
+				return false, 0;
 			}
 
 			for 0..vertex_count-1 {
@@ -118,60 +120,169 @@ import_gltf :: (filepath : string) -> bool, []Mesh{
 			}
 		}
 
-		new_mesh := pool_add(*mesh_pool, mesh);
-		array_add(*meshes, new_mesh);
+		mesh_lookup[it] = pool_add(*mesh_pool, mesh);
 	}
 
-	return true, meshes;
+	// build node tree from gltf nodes
+	// first pass: create all nodes with their mesh and transform
+	node_lookup := NewArray(cast(s64)data.nodes_count, Node);
+	defer free(node_lookup.data);
+
+	for 0..data.nodes_count-1 {
+		node_cgltf := *data.nodes[it];
+
+		node_data : Node_Data;
+		node_data.matrix = Matrix4_Identity;
+
+		if node_cgltf.name != null then node_data.name = copy_string(to_string(node_cgltf.name));
+
+		if node_cgltf.mesh != null {
+			mesh_index := cast(s64)(node_cgltf.mesh - data.meshes);
+			node_data.mesh = mesh_lookup[mesh_index];
+		}
+
+		// get the local transform
+		local_matrix : [16]float32;
+		cgltf_node_transform_local(node_cgltf, local_matrix.data);
+
+		// cgltf gives column-major, Matrix4 is row-major — transpose
+		for r : 0..3 {
+			for c : 0..3 {
+				node_data.matrix.coef[r][c] = local_matrix[c * 4 + r];
+			}
+		}
+
+		node_lookup[it] = pool_add(*node_pool, node_data);
+	}
+
+	// second pass: wire up children
+	for 0..data.nodes_count-1 {
+		node_cgltf := *data.nodes[it];
+		if node_cgltf.children_count == 0 then continue;
+
+		node_data := pool_get(node_pool, node_lookup[it]);
+		node_data.children = NewArray(cast(s64)node_cgltf.children_count, Node);
+
+		for c : 0..node_cgltf.children_count-1 {
+			child_index := cast(s64)(node_cgltf.children[c] - data.nodes);
+			node_data.children[c] = node_lookup[child_index];
+		}
+	}
+
+	// build scene root node from gltf scene
+	scene_cgltf := data.scene;
+	if scene_cgltf == null && data.scenes_count > 0 then scene_cgltf = data.scenes;
+
+	scene_data : Node_Data;
+	scene_data.matrix = Matrix4_Identity;
+
+	if scene_cgltf != null {
+		scene_data.children = NewArray(cast(s64)scene_cgltf.nodes_count, Node);
+		for 0..scene_cgltf.nodes_count-1 {
+			child_index := cast(s64)(scene_cgltf.nodes[it] - data.nodes);
+			scene_data.children[it] = node_lookup[child_index];
+		}
+	}
+
+	scene := pool_add(*node_pool, scene_data);
+	return true, scene;
 }
 
-draw_mesh_for_shadow_map :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, split : u32) {
-	mesh_data := pool_get(mesh_pool, mesh);
-	for primitive : mesh_data.primitives {
-		Data :: struct {
-			pointers : [2] Gpu_Ptr;
-			split_id : u32;
+draw_scene_tree :: (node : Node, index : int) {
+	node_data := pool_get(node_pool, node);
+
+	has_mesh     := node_data.mesh != 0;
+	has_children := node_data.children.count > 0;
+
+	node_label := ifx node_data.name.count > 0 then node_data.name else tprint("Node %", index);
+	mesh_label : string;
+	if has_mesh {
+		mesh_data := pool_get(mesh_pool, node_data.mesh);
+		mesh_label = ifx mesh_data.name.count > 0 then mesh_data.name else "mesh";
+	}
+
+	label := tprint("%##%", node_label, cast(s64)node);
+
+	if has_children {
+		open := ImGui.TreeNodeEx(to_c_string(label), .OpenOnArrow);
+
+		if has_mesh {
+			ImGui.SameLine();
+			ImGui.TextDisabled(tprint("[%]", mesh_label));
 		}
-		draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Data);
-		draw_cpu.* = Data.{.[primitive.vertex_gpu, frame_data], split};
 
-		Pixel_Data :: struct {
-			material   : u32;
-			materials  : Gpu_Ptr;
-			frame_data : Gpu_Ptr;
-		};
-
-		pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Pixel_Data);
-		pixel_cpu.* = Pixel_Data.{xx (primitive.material - 1), gpu_material_arena.gpu, frame_data};
-
-		if primitive.index_count == 0 {
-			gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
-		} else {
-			gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+		if open {
+			for child, ci : node_data.children {
+				draw_scene_tree(child, ci);
+			}
+			ImGui.TreePop();
+		}
+	} else {
+		ImGui.TreeNodeEx(to_c_string(label), .Leaf | .NoTreePushOnOpen);
+		if has_mesh {
+			ImGui.SameLine();
+			ImGui.TextDisabled(tprint("[%]", mesh_label));
 		}
 	}
 }
 
-draw_mesh :: (cmd_buff : Gpu_Command_Buffer, mesh : Mesh, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr) {
-	mesh_data := pool_get(mesh_pool, mesh);
-	
-	for primitive : mesh_data.primitives {
-		draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, [2] Gpu_Ptr);
-		draw_cpu.* = .[primitive.vertex_gpu, frame_data];
+create_node :: (mesh : Mesh, matrix : Matrix4 = Matrix4_Identity, children : []Node = .[]) -> Node {
+	return pool_add(*node_pool, .{name = "", mesh = mesh, matrix = matrix, children = children});
+}
 
-		Material_Pair :: struct {
-			material   : u32;
-			materials  : Gpu_Ptr;
-			frame_data : Gpu_Ptr;
-		};
-		pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Material_Pair);
-		pixel_cpu.* = Material_Pair.{xx (primitive.material - 1), gpu_material_arena.gpu, frame_data};
+draw_node_for_shadow_map :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, lod : u32) {
+	node_data := pool_get(node_pool, node);
 
-		if primitive.index_count == 0 {
-			gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
-		} else {
-			gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+	if node_data.mesh != 0 {
+		mesh_data := pool_get(mesh_pool, node_data.mesh);
+		for primitive : mesh_data.primitives {
+			Data :: struct {
+				pointers : [2] Gpu_Ptr;
+				split    : u32;
+			}
+			draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Data);
+			draw_cpu.* = Data.{.[primitive.vertex_gpu, frame_data], lod};
+
+			if primitive.index_count == 0 {
+				gpu_draw_instanced(cmd_buff, draw_gpu, 0, primitive.vertex_count, 1);
+			} else {
+				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, 0, primitive.index_gpu, primitive.index_count, 1);
+			}
 		}
+	}
+
+	for child : node_data.children {
+		draw_node_for_shadow_map(cmd_buff, child, draw_arena, frame_data, lod);
+	}
+}
+
+draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr) {
+	node_data := pool_get(node_pool, node);
+
+	if node_data.mesh != 0 {
+		mesh_data := pool_get(mesh_pool, node_data.mesh);
+
+		for primitive : mesh_data.primitives {
+			draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, [2] Gpu_Ptr);
+			draw_cpu.* = .[primitive.vertex_gpu, frame_data];
+
+			Material_Pair :: struct {
+				material   : Gpu_Ptr;
+				frame_data : Gpu_Ptr;
+			};
+			pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Material_Pair);
+			pixel_cpu.* = Material_Pair.{primitive.material, frame_data};
+
+			if primitive.index_count == 0 {
+				gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
+			} else {
+				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+			}
+		}
+	}
+
+	for child : node_data.children {
+		draw_node(cmd_buff, child, draw_arena, frame_data);
 	}
 }
 
@@ -194,22 +305,29 @@ texture_load_from_file_one_time :: (filepath : string) -> bool, Gpu_Texture_View
 #scope_file
 
 gpu_arena : Gpu_Arena;
-gpu_material_arena : Gpu_Arena;
+gpu_material_arena  : Gpu_Arena;
+gpu_transform_arena : Gpu_Arena;
 
 Primitive :: struct {
-	// vertices       : []Vertex;
 	vertex_gpu     : Gpu_Ptr;
 
-	// indices        : []u32;
 	index_gpu      : Gpu_Ptr;
 
 	index_count    : u32;
 	vertex_count   : u32;
 
-	material : Material;
+	material : Gpu_Ptr;
+}
+
+Node_Data :: struct {
+	name     : string;
+	mesh     : Mesh; // 0 = no mesh attached
+	matrix   : Matrix4;
+	children : []Node;
 }
 
 Mesh_Data :: struct {
+	name       : string;
 	primitives : []Primitive;
 }
 
@@ -229,9 +347,9 @@ Material_Data :: struct {
 	pad0     : [3]u32;
 }
 
-mesh_pool     : Pool(Mesh, Mesh_Data, 1024);
-material_pool : Pool(Material, Material_Data, 512);
-texture_pool  : Pool(Texture, Texture_Data, 1024);
+mesh_pool      : Pool(Mesh, Mesh_Data, 1024);
+texture_pool   : Pool(Texture, Texture_Data, 1024);
+node_pool      : Pool(Node, Node_Data, 1024);
 
 texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Timeline_Pair) -> bool, Texture {
 	log("importing %...", filepath);
@@ -293,7 +411,7 @@ texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Tim
 	return true, texture;
 }
 
-material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material) -> bool, Material {
+material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material) -> bool, Gpu_Ptr {
 	upload_complete_semaphore := gpu_create_semaphore(0);
 	defer gpu_destroy_semaphore(upload_complete_semaphore);
 
@@ -343,9 +461,7 @@ material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material
 	}
 	material_cpu.* = material_data;
 
-	material := pool_add(*material_pool, material_data);
-
-	return true, material;
+	return true, material_gpu;
 }
 
 result_to_string :: (result : Gpu_Result) -> string {
