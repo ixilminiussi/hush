@@ -143,10 +143,10 @@ render_imgui_pass :: (cmd_buff: Gpu_Command_Buffer, render_target: Gpu_Texture_V
 
     if framebuffer_width <= 0 || framebuffer_height <= 0 || draw_data.TotalVtxCount == 0 then return;
 
-    vertex_cpu, vertex_gpu := gpu_arena_alloc(*imgui_view_data.vertex_buffer_allocator, size_of(ImGui.ImDrawVert) * draw_data.TotalVtxCount);
-    index_cpu, index_gpu   := gpu_arena_alloc(*imgui_view_data.index_buffer_allocator, size_of(ImGui.ImDrawIdx) * draw_data.TotalIdxCount);
+    vertex_cpu, vertex_gpu := gpu_arena_alloc(*imgui_view_datas[imgui_frame_index].vertex_buffer_allocator, size_of(ImGui.ImDrawVert) * draw_data.TotalVtxCount);
+    index_cpu, index_gpu   := gpu_arena_alloc(*imgui_view_datas[imgui_frame_index].index_buffer_allocator, size_of(ImGui.ImDrawIdx) * draw_data.TotalIdxCount);
 
-    global_params_cpu, global_params_gpu := gpu_arena_alloc(*imgui_view_data.constant_buffer_allocator, ImGui_Global_Params);
+    global_params_cpu, global_params_gpu := gpu_arena_alloc(*imgui_view_datas[imgui_frame_index].constant_buffer_allocator, ImGui_Global_Params);
     global_params_cpu.scale[0] = (1. / (draw_data.DisplaySize.x - draw_data.DisplayPos.x)) * 2.;
     global_params_cpu.scale[1] = (1. / (draw_data.DisplaySize.y - draw_data.DisplayPos.y)) * -2.;
     global_params_cpu.translate[0] = -1.;
@@ -214,11 +214,11 @@ render_imgui_pass :: (cmd_buff: Gpu_Command_Buffer, render_target: Gpu_Texture_V
                     tex_index := cast(Gpu_Texture_View) cmd.TextureId;
                     assert(tex_index != 0);
 
-                    vertex_params_cpu, vertex_params_gpu := gpu_arena_alloc(*imgui_view_data.constant_buffer_allocator, ImGui_Vertex_Params);
+                    vertex_params_cpu, vertex_params_gpu := gpu_arena_alloc(*imgui_view_datas[imgui_frame_index].constant_buffer_allocator, ImGui_Vertex_Params);
                     vertex_params_cpu.vertices = current_vertex_ptr + cmd.VtxOffset.(Gpu_Ptr) * size_of(ImGui.ImDrawVert);
                     vertex_params_cpu.global_params = global_params_gpu;
 
-                    pixel_params_cpu, pixel_params_gpu := gpu_arena_alloc(*imgui_view_data.constant_buffer_allocator, ImGui_Pixel_Params);
+                    pixel_params_cpu, pixel_params_gpu := gpu_arena_alloc(*imgui_view_datas[imgui_frame_index].constant_buffer_allocator, ImGui_Pixel_Params);
                     pixel_params_cpu.texture = tex_index;
                     pixel_params_cpu.sampler = imgui_sampler;
 
@@ -236,21 +236,26 @@ render_imgui_pass :: (cmd_buff: Gpu_Command_Buffer, render_target: Gpu_Texture_V
 }
 
 init_imgui_arenas :: (vertex_buffer_size : s64 = size_of(ImGui.ImDrawVert) * 64000, index_buffer_size : s64 = size_of(ImGui.ImDrawIdx) * 64000) {
-	imgui_view_data.constant_buffer_allocator = gpu_make_arena(3 * 256); // 3 is MAX_FRAMES_IN_FLIGHT. Hard coded by sgpu for now
-	imgui_view_data.vertex_buffer_allocator   = gpu_make_arena(vertex_buffer_size);
-	imgui_view_data.index_buffer_allocator    = gpu_make_arena(index_buffer_size);
+	for *imgui_view_datas {
+		it.constant_buffer_allocator = gpu_make_arena(256 * 1024);
+		it.vertex_buffer_allocator   = gpu_make_arena(vertex_buffer_size);
+		it.index_buffer_allocator    = gpu_make_arena(index_buffer_size);
+	}
 }
 
 free_imgui_arenas :: () {
-	gpu_free_arena(imgui_view_data.index_buffer_allocator);
-	gpu_free_arena(imgui_view_data.vertex_buffer_allocator);
-	gpu_free_arena(imgui_view_data.constant_buffer_allocator);
+	for *imgui_view_datas {
+		gpu_free_arena(it.index_buffer_allocator);
+		gpu_free_arena(it.vertex_buffer_allocator);
+		gpu_free_arena(it.constant_buffer_allocator);
+	}
 }
 
-reset_imgui_arenas :: () {
-	gpu_reset_arena(*imgui_view_data.index_buffer_allocator);
-	gpu_reset_arena(*imgui_view_data.vertex_buffer_allocator);
-	gpu_reset_arena(*imgui_view_data.constant_buffer_allocator);
+reset_imgui_arenas :: (fi : s64) {
+	imgui_frame_index = xx fi;
+	gpu_reset_arena(*imgui_view_datas[fi].index_buffer_allocator);
+	gpu_reset_arena(*imgui_view_datas[fi].vertex_buffer_allocator);
+	gpu_reset_arena(*imgui_view_datas[fi].constant_buffer_allocator);
 }
 
 ImGui :: #import "ImGui";
@@ -267,7 +272,8 @@ ImGui_View_Data :: struct {
 	index_buffer_allocator    : Gpu_Arena;
 }
 
-imgui_view_data : ImGui_View_Data;
+imgui_view_datas : [MAX_FRAMES_IN_FLIGHT] ImGui_View_Data;
+imgui_frame_index : u32 = 0;
 
 ImGui_Global_Params :: struct {
     scale     : [2] float;

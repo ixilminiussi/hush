@@ -14,10 +14,57 @@ Vertex :: struct {
 
 THUMBNAIL_SIZE :: 128;
 
+AABB :: struct {
+	min : Vector3;
+	max : Vector3;
+}
+
+OBJECT_NAME_MAX :: 64;
+
+Node_Data :: struct {
+	name            : string;
+	mesh            : Mesh; // 0 = no mesh attached
+	matrix          : Matrix4;
+	children        : []Node;
+	aabb            : AABB;
+	object_id       : Object;
+	gltf_node_index : s32 = -1;
+}
+
+Object_Data :: struct {
+	name            : [OBJECT_NAME_MAX] u8;
+	node            : Node; // source node (for display/reference)
+	meshes          : [] Mesh;
+	matrices_soa    : [] Matrix4_SoA; // precalculated transforms in SoA layout (groups of 4)
+	mesh_count      : s32;            // actual number of meshes (matrices_soa may have padding)
+	thumbnail       : Gpu_Texture_View;
+	gltf_index      : s32;
+	gltf_node_index : s32;
+}
+
+Mesh_Data :: struct {
+	name       : string;
+	primitives : []Primitive;
+}
+
+Gltf_Entry :: struct {
+	filepath : string;
+	scene    : Node;
+}
+
+// pools
+mesh_pool    : Pool(Mesh, Mesh_Data, 1024);
+texture_pool : Pool(Texture, Texture_Data, 1024);
+node_pool    : Pool(Node, Node_Data, 1024);
+object_pool  : Pool(Object, Object_Data, 1024);
+
+loaded_gltfs : [..] Gltf_Entry;
+
+// --- utility ---
+
 open_file_dialog :: (title : string, start_dir : string, filter : string) -> string {
 	result, output := run_command("zenity", "--file-selection", tprint("--title=%", title), tprint("--filename=%", start_dir), tprint("--file-filter=%", filter), capture_and_return_output = true);
 	if result.type != .EXITED || result.exit_code != 0 then return "";
-	// strip trailing newline
 	path := output;
 	while path.count > 0 && (path[path.count - 1] == #char "\n" || path[path.count - 1] == #char "\r") {
 		path.count -= 1;
@@ -32,10 +79,12 @@ gltf_display_name :: (filepath : string) -> string {
 	return filepath;
 }
 
+// --- lifecycle ---
+
 asset_manager_initialize :: () {
 	gpu_arena = gpu_make_arena(512 * 1024 * 1024); // 512 MB
 	gpu_material_arena = gpu_make_arena(size_of(Material_Data) * 16384);
-	thumbnail_arena = gpu_make_arena(65536);
+	thumbnail_arena = gpu_make_arena(1024 * 1024);
 }
 
 asset_manager_free :: () {
@@ -44,52 +93,57 @@ asset_manager_free :: () {
 	gpu_free_arena(thumbnail_arena);
 }
 
+// --- queries ---
 
 get_node_bounding_box :: (node : Node) -> AABB {
 	return pool_get(node_pool, node).aabb;
 }
 
-draw_bounding_box :: (aabb : AABB, camera : Camera, screen_width : float, screen_height : float) {
-	corners : [8] Vector3;
-	corners[0] = .{aabb.min.x, aabb.min.y, aabb.min.z};
-	corners[1] = .{aabb.max.x, aabb.min.y, aabb.min.z};
-	corners[2] = .{aabb.max.x, aabb.max.y, aabb.min.z};
-	corners[3] = .{aabb.min.x, aabb.max.y, aabb.min.z};
-	corners[4] = .{aabb.min.x, aabb.min.y, aabb.max.z};
-	corners[5] = .{aabb.max.x, aabb.min.y, aabb.max.z};
-	corners[6] = .{aabb.max.x, aabb.max.y, aabb.max.z};
-	corners[7] = .{aabb.min.x, aabb.max.y, aabb.max.z};
+// --- node / object operations ---
 
-	vp := camera.projection * camera.view;
+create_node :: (mesh : Mesh, matrix : Matrix4 = Matrix4_Identity, children : []Node = .[]) -> Node {
+	return pool_add(*node_pool, .{name = "", mesh = mesh, matrix = matrix, children = children});
+}
 
-	screen_points : [8] Vector2;
-	for i : 0..7 {
-		clip := vp * make_vector4(corners[i], 1.0);
-		if clip.w <= 0 return; // behind camera
-		ndc := Vector3.{clip.x / clip.w, clip.y / clip.w, clip.z / clip.w};
-		screen_points[i] = .{
-			( ndc.x * 0.5 + 0.5) * screen_width,
-			(-ndc.y * 0.5 + 0.5) * screen_height,
-		};
-	}
-
-	draw_list := ImGui.GetForegroundDrawList();
-	color : ImGui.ImU32 = 0xFF00FF00; // green
-
-	edges :: s32.[
-		0,1, 1,2, 2,3, 3,0,
-		4,5, 5,6, 6,7, 7,4,
-		0,4, 1,5, 2,6, 3,7,
-	];
-
-	for i : 0..11 {
-		a := screen_points[edges[i * 2]];
-		b := screen_points[edges[i * 2 + 1]];
-		draw_list.AddLine(draw_list, .{a.x, a.y}, .{b.x, b.y}, color, 2.0);
+set_node_object_id :: (node : Node, id : Object) {
+	nd := pool_get(node_pool, node);
+	nd.object_id = id;
+	for child : nd.children {
+		set_node_object_id(child, id);
 	}
 }
 
-selected_node : Node;
+flatten_node_tree :: (node : Node, parent_transform : Matrix4 = Matrix4_Identity) -> [] Mesh, [] Matrix4 {
+	meshes   : [..] Mesh;
+	matrices : [..] Matrix4;
+	flatten_node_tree_recursive(node, parent_transform, *meshes, *matrices);
+	return meshes, matrices;
+}
+
+register_object_from_node :: (node : Node, gltf_index : s32, pipeline : Gpu_Pipeline, queue : Gpu_Queue) {
+	meshes, matrices := flatten_node_tree(node);
+	thumbnail := render_object_thumbnail(node, pipeline, queue);
+	obj : Object_Data;
+	obj.node = node;
+	obj.meshes = meshes;
+	obj.matrices_soa = flatten_to_soa(matrices);
+	obj.mesh_count = xx matrices.count;
+	obj.thumbnail = thumbnail;
+	free(matrices.data);
+
+	node_data := pool_get(node_pool, node);
+	src := ifx node_data.name.count > 0 then node_data.name else "unnamed";
+	len := min(src.count, OBJECT_NAME_MAX - 1);
+	memcpy(obj.name.data, src.data, len);
+	obj.name[len] = 0;
+	obj.gltf_index      = gltf_index;
+	obj.gltf_node_index = node_data.gltf_node_index;
+
+	object_id := pool_add(*object_pool, obj);
+	set_node_object_id(node, object_id);
+}
+
+// --- thumbnails ---
 
 render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Queue) -> Gpu_Texture_View {
 	aabb := get_node_bounding_box(node);
@@ -101,7 +155,6 @@ render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Qu
 	};
 	extent := aabb.max.x - aabb.min.x;
 
-	// place camera looking at center from a 3/4 angle
 	cam_dir := Vector3.{-1.0, 0., 0.};
 	cam_pos := center - cam_dir * extent * 1.5;
 
@@ -110,7 +163,6 @@ render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Qu
 	proj := make_projection_matrix(fov, 1.0, extent * 0.1, extent * 10.0);
 	vp := proj * view;
 
-	// create offscreen texture
 	_, color_texture := gpu_create_texture(.{
 		dimensions = .[THUMBNAIL_SIZE, THUMBNAIL_SIZE, 1],
 		format     = .B8G8R8A8_SRGB,
@@ -125,14 +177,13 @@ render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Qu
 	});
 	depth_view := gpu_texture_view(depth_texture);
 
-	// set up frame data
 	gpu_reset_arena(*thumbnail_arena);
 	frame_cpu, frame_gpu := gpu_arena_alloc(*thumbnail_arena, Frame_Data);
 	memset(frame_cpu, 0, size_of(Frame_Data));
 	frame_cpu.camera_view_proj = vp;
 	frame_cpu.camera_position  = cam_pos;
+	frame_cpu.view_mode        = .ALBEDO;
 
-	// render
 	_, cmd_buff := gpu_start_command_recording(queue);
 
 	gpu_begin_render_pass(cmd_buff, .{
@@ -157,7 +208,7 @@ render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Qu
 
 	gpu_set_pipeline(cmd_buff, pipeline);
 
-	draw_node(cmd_buff, node, *thumbnail_arena, frame_gpu);
+	draw_node(cmd_buff, node, *thumbnail_arena, frame_gpu, Matrix4_Identity, 0);
 
 	gpu_end_render_pass(cmd_buff);
 
@@ -171,102 +222,103 @@ render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Qu
 	return color_view;
 }
 
-draw_object_library :: () {
-	if ImGui.Begin("Object Library") {
-		avail := ImGui.GetContentRegionAvail().x;
-		thumb_size : float = 96.0;
-		padding : float = 8.0;
-		cols := cast(int)((avail + padding) / (thumb_size + padding));
-		if cols < 1 then cols = 1;
+// --- drawing (GPU commands for nodes) ---
 
-		col := 0;
-		for *it : object_pool.values {
-			if it.node == 0 continue;
+draw_placed_objects :: (cmd_buff : Gpu_Command_Buffer, placed_objects : [..]Placed_Object, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, lod : u32) {
+	for placed_object : placed_objects {
+		object_data := pool_get(object_pool, placed_object.object);
+		if object_data == null || object_data.node == 0 then continue;
 
-			object_id := cast(Object)(it_index + 1);
+		// Batch-multiply placement transform * all object matrices using SoA SIMD.
+		// Each simd_multiply_soa call processes 4 matrices at once.
+		mesh_index := 0;
+		for bundle_index : 0..object_data.matrices_soa.count-1 {
+			result_soa := simd_multiply_soa(placed_object.transform, object_data.matrices_soa[bundle_index]);
 
-			ImGui.BeginGroup();
+			lanes_in_bundle := min(4, object_data.mesh_count - xx (bundle_index * 4));
+			for lane : 0..lanes_in_bundle-1 {
+				mesh := object_data.meshes[mesh_index];
+				if mesh != 0 {
+					mesh_data := pool_get(mesh_pool, mesh);
+					if mesh_data == null { mesh_index += 1; continue; }
 
-			if it.thumbnail != 0 {
-				ImGui.Image(cast(ImGui.ImTextureID) it.thumbnail, .{thumb_size, thumb_size});
-			} else {
-				ImGui.Dummy(.{thumb_size, thumb_size});
-			}
+					model := matrix_from_soa(result_soa, lane);
 
-			ImGui.PushItemWidth(thumb_size);
-			ImGui.InputText(to_c_string(tprint("##name_%", it_index)), it.name.data, OBJECT_NAME_MAX);
-			ImGui.PopItemWidth();
+					for primitive : mesh_data.primitives {
+						Draw_Data :: struct {
+							pointers : [2] Gpu_Ptr;
+							model    : Matrix4;
+							lod      : u32;
+						}
+						draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Draw_Data);
+						if draw_cpu == null then continue;
+						draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], model, lod};
 
-			if ImGui.SmallButton(to_c_string(tprint("X##obj_%", it_index))) {
-				pool_remove(*object_pool, object_id);
-				it.node = 0;
-			}
+						Material_Pair :: struct {
+							material   : Gpu_Ptr;
+							frame_data : Gpu_Ptr;
+							object_id  : u32;
+						};
+						pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Material_Pair);
+						if pixel_cpu == null then continue;
+						pixel_cpu.* = Material_Pair.{primitive.material, frame_data, xx cast(s64)object_data.node};
 
-			ImGui.EndGroup();
-
-			col += 1;
-			if col < cols {
-				ImGui.SameLine(0, padding);
-			} else {
-				col = 0;
-			}
-		}
-	}
-	ImGui.End();
-}
-
-draw_asset_browser :: () {
-	if ImGui.Begin("Assets") {
-		ImGui.PushItemWidth(-1);
-		ImGui.InputText("##search", asset_browser_search.data, OBJECT_NAME_MAX);
-		ImGui.PopItemWidth();
-		ImGui.Separator();
-
-		search_str := to_string(asset_browser_search.data);
-
-		avail := ImGui.GetContentRegionAvail().x;
-		thumb_size : float = 96.0;
-		padding : float = 8.0;
-		cols := cast(int)((avail + padding) / (thumb_size + padding));
-		if cols < 1 then cols = 1;
-
-		col := 0;
-		for object_pool.values {
-			if it.node == 0 continue;
-
-			name_str := to_string(it.name.data);
-			if search_str.count > 0 && !contains_nocase(name_str, search_str) continue;
-
-			ImGui.BeginGroup();
-
-			if it.thumbnail != 0 {
-				ImGui.Image(cast(ImGui.ImTextureID) it.thumbnail, .{thumb_size, thumb_size});
-			} else {
-				ImGui.Dummy(.{thumb_size, thumb_size});
-			}
-
-			ImGui.Text(name_str);
-
-			ImGui.EndGroup();
-
-			col += 1;
-			if col < cols {
-				ImGui.SameLine(0, padding);
-			} else {
-				col = 0;
+						if primitive.index_count == 0 {
+							gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
+						} else {
+							gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+						}
+					}
+				}
+				mesh_index += 1;
 			}
 		}
 	}
-	ImGui.End();
 }
 
-draw_asset_manager :: (gym_scene : Node, gltf_index : s32, pipeline : Gpu_Pipeline, queue : Gpu_Queue) {
-	ImGui.Text("Scene Tree (click to select, + to register)");
-	ImGui.Separator();
-	draw_scene_tree_selectable(gym_scene, 0, gltf_index, pipeline, queue);
+draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, world_transform : Matrix4, lod : u32) {
+	node_data := pool_get(node_pool, node);
+	if node_data == null return;
+
+	transform := world_transform * node_data.matrix;
+
+	if node_data.mesh != 0 {
+		mesh_data := pool_get(mesh_pool, node_data.mesh);
+		if mesh_data == null return;
+
+		for primitive : mesh_data.primitives {
+			Draw_Data :: struct {
+				pointers : [2] Gpu_Ptr;
+				model    : Matrix4;
+				lod      : u32;
+			}
+			draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Draw_Data);
+			if draw_cpu == null then continue;
+			draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], transform, lod};
+
+			Material_Pair :: struct {
+				material   : Gpu_Ptr;
+				frame_data : Gpu_Ptr;
+				object_id  : u32;
+			};
+			pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Material_Pair);
+			if pixel_cpu == null then continue;
+			pixel_cpu.* = Material_Pair.{primitive.material, frame_data, xx cast(s64)node_data.object_id};
+
+			if primitive.index_count == 0 {
+				gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
+			} else {
+				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+			}
+		}
+	}
+
+	for child : node_data.children {
+		draw_node(cmd_buff, child, draw_arena, frame_data, transform, lod);
+	}
 }
 
-draw_scene_tree_selectable :: (node : Node, index : int, gltf_index : s32, pipeline : Gpu_Pipeline, queue : Gpu_Queue) {
+draw_scene_tree :: (node : Node, index : int) {
 	node_data := pool_get(node_pool, node);
 
 	has_mesh     := node_data.mesh != 0;
@@ -280,86 +332,57 @@ draw_scene_tree_selectable :: (node : Node, index : int, gltf_index : s32, pipel
 	}
 
 	label := tprint("%##%", node_label, cast(s64)node);
-	is_selected := selected_node == node;
-	flags : ImGui.TreeNodeFlags = .OpenOnArrow;
-	if is_selected then flags |= .Selected;
 
 	if has_children {
-		open := ImGui.TreeNodeEx(to_c_string(label), flags);
-
-		if ImGui.IsItemClicked(.Left) && !ImGui.IsItemToggledOpen() {
-			selected_node = ifx is_selected then cast(Node) 0 else node;
-		}
+		open := ImGui.TreeNodeEx(to_c_string(label), .OpenOnArrow);
 
 		if has_mesh {
 			ImGui.SameLine();
 			ImGui.TextDisabled(tprint("[%]", mesh_label));
-		}
-
-		ImGui.SameLine();
-		if ImGui.SmallButton(to_c_string(tprint("+##%", cast(s64)node))) {
-			meshes, matrices := flatten_node_tree(node);
-			thumbnail := render_object_thumbnail(node, pipeline, queue);
-			obj : Object_Data;
-			obj.node = node;
-			obj.meshes = meshes;
-			obj.matrices = matrices;
-			obj.thumbnail = thumbnail;
-
-			node_data_for_name := pool_get(node_pool, node);
-			src := ifx node_data_for_name.name.count > 0 then node_data_for_name.name else "unnamed";
-			len := min(src.count, OBJECT_NAME_MAX - 1);
-			memcpy(obj.name.data, src.data, len);
-			obj.name[len] = 0;
-			obj.gltf_index      = gltf_index;
-			obj.gltf_node_index = node_data_for_name.gltf_node_index;
-
-			object_id := pool_add(*object_pool, obj);
-			set_node_object_id(node, object_id);
 		}
 
 		if open {
 			for child, ci : node_data.children {
-				draw_scene_tree_selectable(child, ci, gltf_index, pipeline, queue);
+				draw_scene_tree(child, ci);
 			}
 			ImGui.TreePop();
 		}
 	} else {
-		leaf_flags := flags | .Leaf | .NoTreePushOnOpen;
-		ImGui.TreeNodeEx(to_c_string(label), leaf_flags);
-
-		if ImGui.IsItemClicked(.Left) {
-			selected_node = ifx is_selected then cast(Node) 0 else node;
-		}
-
+		ImGui.TreeNodeEx(to_c_string(label), .Leaf | .NoTreePushOnOpen);
 		if has_mesh {
 			ImGui.SameLine();
 			ImGui.TextDisabled(tprint("[%]", mesh_label));
 		}
-
-		ImGui.SameLine();
-		if ImGui.SmallButton(to_c_string(tprint("+##%", cast(s64)node))) {
-			meshes, matrices := flatten_node_tree(node);
-			thumbnail := render_object_thumbnail(node, pipeline, queue);
-			obj : Object_Data;
-			obj.node = node;
-			obj.meshes = meshes;
-			obj.matrices = matrices;
-			obj.thumbnail = thumbnail;
-
-			node_data_for_name := pool_get(node_pool, node);
-			src := ifx node_data_for_name.name.count > 0 then node_data_for_name.name else "unnamed";
-			len := min(src.count, OBJECT_NAME_MAX - 1);
-			memcpy(obj.name.data, src.data, len);
-			obj.name[len] = 0;
-			obj.gltf_index      = gltf_index;
-			obj.gltf_node_index = node_data_for_name.gltf_node_index;
-
-			object_id := pool_add(*object_pool, obj);
-			set_node_object_id(node, object_id);
-		}
 	}
 }
+
+// --- gltf registry ---
+
+register_gltf :: (filepath : string, scene : Node) -> s32 {
+	for entry, i : loaded_gltfs {
+		if entry.filepath == filepath then return cast(s32) i;
+	}
+	index := cast(s32)loaded_gltfs.count;
+	array_add(*loaded_gltfs, .{filepath = copy_string(filepath), scene = scene});
+	return index;
+}
+
+unregister_gltf :: (index : s32) {
+	if index < 0 || index >= cast(s32)loaded_gltfs.count return;
+	array_ordered_remove_by_index(*loaded_gltfs, index);
+}
+
+find_node_by_gltf_index :: (root : Node, gltf_node_index : s32) -> Node {
+	nd := pool_get(node_pool, root);
+	if nd.gltf_node_index == gltf_node_index then return root;
+	for child : nd.children {
+		found := find_node_by_gltf_index(child, gltf_node_index);
+		if found != 0 then return found;
+	}
+	return 0;
+}
+
+// --- import ---
 
 import_gltf :: (filepath : string) -> bool, Node {
 	log("importing %...", filepath);
@@ -383,7 +406,6 @@ import_gltf :: (filepath : string) -> bool, Node {
 		return false, 0;
 	}
 
-	// load all meshes into the pool, indexed by their position in data.meshes
 	mesh_lookup     := NewArray(cast(s64)data.meshes_count, Mesh);
 	mesh_aabb_lookup := NewArray(cast(s64)data.meshes_count, AABB);
 	defer free(mesh_lookup.data);
@@ -450,7 +472,7 @@ import_gltf :: (filepath : string) -> bool, Node {
 
 			for 0..vertex_count-1 {
 				using vertex : Vertex;
-				color = .{1, 1, 1}; // default white; overwritten if vertex colors exist
+				color = .{1, 1, 1};
 
 				cgltf_accessor_read_float(position_accessor, it, cast(*float32)*position, 3);
 
@@ -477,8 +499,6 @@ import_gltf :: (filepath : string) -> bool, Node {
 		mesh_lookup[it] = pool_add(*mesh_pool, mesh);
 	}
 
-	// build node tree from gltf nodes
-	// first pass: create all nodes with their mesh and transform
 	node_lookup := NewArray(cast(s64)data.nodes_count, Node);
 	defer free(node_lookup.data);
 
@@ -497,11 +517,9 @@ import_gltf :: (filepath : string) -> bool, Node {
 			node_data.mesh = mesh_lookup[mesh_index];
 		}
 
-		// get the local transform
 		local_matrix : [16]float32;
 		cgltf_node_transform_local(node_cgltf, local_matrix.data);
 
-		// cgltf gives column-major, Matrix4 is row-major — transpose
 		for r : 0..3 {
 			for c : 0..3 {
 				node_data.matrix.coef[r][c] = local_matrix[c * 4 + r];
@@ -511,7 +529,6 @@ import_gltf :: (filepath : string) -> bool, Node {
 		node_lookup[it] = pool_add(*node_pool, node_data);
 	}
 
-	// second pass: wire up children
 	for 0..data.nodes_count-1 {
 		node_cgltf := *data.nodes[it];
 		if node_cgltf.children_count == 0 then continue;
@@ -525,7 +542,6 @@ import_gltf :: (filepath : string) -> bool, Node {
 		}
 	}
 
-	// build scene root node from gltf scene
 	scene_cgltf := data.scene;
 	if scene_cgltf == null && data.scenes_count > 0 then scene_cgltf = data.scenes;
 
@@ -545,158 +561,7 @@ import_gltf :: (filepath : string) -> bool, Node {
 	return true, scene;
 }
 
-draw_scene_tree :: (node : Node, index : int) {
-	node_data := pool_get(node_pool, node);
-
-	has_mesh     := node_data.mesh != 0;
-	has_children := node_data.children.count > 0;
-
-	node_label := ifx node_data.name.count > 0 then node_data.name else tprint("Node %", index);
-	mesh_label : string;
-	if has_mesh {
-		mesh_data := pool_get(mesh_pool, node_data.mesh);
-		mesh_label = ifx mesh_data.name.count > 0 then mesh_data.name else "mesh";
-	}
-
-	label := tprint("%##%", node_label, cast(s64)node);
-
-	if has_children {
-		open := ImGui.TreeNodeEx(to_c_string(label), .OpenOnArrow);
-
-		if has_mesh {
-			ImGui.SameLine();
-			ImGui.TextDisabled(tprint("[%]", mesh_label));
-		}
-
-		if open {
-			for child, ci : node_data.children {
-				draw_scene_tree(child, ci);
-			}
-			ImGui.TreePop();
-		}
-	} else {
-		ImGui.TreeNodeEx(to_c_string(label), .Leaf | .NoTreePushOnOpen);
-		if has_mesh {
-			ImGui.SameLine();
-			ImGui.TextDisabled(tprint("[%]", mesh_label));
-		}
-	}
-}
-
-set_node_object_id :: (node : Node, id : Object) {
-	nd := pool_get(node_pool, node);
-	nd.object_id = id;
-	for child : nd.children {
-		set_node_object_id(child, id);
-	}
-}
-
-create_node :: (mesh : Mesh, matrix : Matrix4 = Matrix4_Identity, children : []Node = .[]) -> Node {
-	return pool_add(*node_pool, .{name = "", mesh = mesh, matrix = matrix, children = children});
-}
-
-draw_node_for_shadow_map :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, lod : u32, world_transform : Matrix4 = Matrix4_Identity) {
-	node_data := pool_get(node_pool, node);
-	if node_data == null return;
-
-	transform := world_transform * node_data.matrix;
-
-	if node_data.mesh != 0 {
-		mesh_data := pool_get(mesh_pool, node_data.mesh);
-		for primitive : mesh_data.primitives {
-			Data :: struct {
-				pointers : [2] Gpu_Ptr;
-				model    : Matrix4;
-				split    : u32;
-			}
-			draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Data);
-			draw_cpu.* = Data.{.[primitive.vertex_gpu, frame_data], transform, lod};
-
-			if primitive.index_count == 0 {
-				gpu_draw_instanced(cmd_buff, draw_gpu, 0, primitive.vertex_count, 1);
-			} else {
-				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, 0, primitive.index_gpu, primitive.index_count, 1);
-			}
-		}
-	}
-
-	for child : node_data.children {
-		draw_node_for_shadow_map(cmd_buff, child, draw_arena, frame_data, lod, transform);
-	}
-}
-
-draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, world_transform : Matrix4 = Matrix4_Identity) {
-	node_data := pool_get(node_pool, node);
-	if node_data == null return;
-
-	transform := world_transform * node_data.matrix;
-
-	if node_data.mesh != 0 {
-		mesh_data := pool_get(mesh_pool, node_data.mesh);
-		if mesh_data == null return;
-
-		for primitive : mesh_data.primitives {
-			Draw_Data :: struct {
-				pointers : [2] Gpu_Ptr;
-				model    : Matrix4;
-			}
-			draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Draw_Data);
-			if draw_cpu == null then continue;
-			draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], transform};
-
-			Material_Pair :: struct {
-				material   : Gpu_Ptr;
-				frame_data : Gpu_Ptr;
-				object_id  : u32;
-			};
-			pixel_cpu, pixel_gpu := gpu_arena_alloc(draw_arena, Material_Pair);
-			if pixel_cpu == null then continue;
-			pixel_cpu.* = Material_Pair.{primitive.material, frame_data, xx cast(s64)node_data.object_id};
-
-			if primitive.index_count == 0 {
-				gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
-			} else {
-				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
-			}
-		}
-	}
-
-	for child : node_data.children {
-		draw_node(cmd_buff, child, draw_arena, frame_data, transform);
-	}
-}
-
-Gltf_Entry :: struct {
-	filepath : string;
-	scene    : Node;
-}
-
-loaded_gltfs : [..] Gltf_Entry;
-
-register_gltf :: (filepath : string, scene : Node) -> s32 {
-	// prevent duplicates
-	for entry, i : loaded_gltfs {
-		if entry.filepath == filepath then return cast(s32) i;
-	}
-	index := cast(s32)loaded_gltfs.count;
-	array_add(*loaded_gltfs, .{filepath = copy_string(filepath), scene = scene});
-	return index;
-}
-
-unregister_gltf :: (index : s32) {
-	if index < 0 || index >= cast(s32)loaded_gltfs.count return;
-	array_ordered_remove_by_index(*loaded_gltfs, index);
-}
-
-find_node_by_gltf_index :: (root : Node, gltf_node_index : s32) -> Node {
-	nd := pool_get(node_pool, root);
-	if nd.gltf_node_index == gltf_node_index then return root;
-	for child : nd.children {
-		found := find_node_by_gltf_index(child, gltf_node_index);
-		if found != 0 then return found;
-	}
-	return 0;
-}
+// --- save / load ---
 
 SAVE_MAGIC   :: 0x48555348; // "HUSH"
 SAVE_VERSION :: 1;
@@ -718,7 +583,6 @@ save_project :: (filepath : string) -> bool {
 	builder : String_Builder;
 	defer free_buffers(*builder);
 
-	// count active objects
 	active_object_count : u32 = 0;
 	for object_pool.values {
 		if it.node != 0 then active_object_count += 1;
@@ -762,7 +626,6 @@ load_project :: (filepath : string, pipeline : Gpu_Pipeline, queue : Gpu_Queue) 
 
 	if header.magic != SAVE_MAGIC || header.version != SAVE_VERSION then return false;
 
-	// import gltfs
 	scenes := NewArray(xx header.gltf_count, Node);
 	defer free(scenes.data);
 
@@ -784,7 +647,6 @@ load_project :: (filepath : string, pipeline : Gpu_Pipeline, queue : Gpu_Queue) 
 		register_gltf(path, scene);
 	}
 
-	// reconstruct objects
 	for i : 0..header.object_count-1 {
 		if cursor + size_of(Save_Object) > contents.count then break;
 
@@ -804,8 +666,10 @@ load_project :: (filepath : string, pipeline : Gpu_Pipeline, queue : Gpu_Queue) 
 		obj.name            = save_obj.name;
 		obj.node            = node;
 		obj.meshes          = meshes;
-		obj.matrices        = matrices;
+		obj.matrices_soa    = flatten_to_soa(matrices);
+		obj.mesh_count      = xx matrices.count;
 		obj.thumbnail       = thumbnail;
+		free(matrices.data);
 		obj.gltf_index      = save_obj.gltf_index;
 		obj.gltf_node_index = save_obj.gltf_node_index;
 
@@ -831,33 +695,7 @@ texture_load_from_file_one_time :: (filepath : string) -> bool, Gpu_Texture_View
 	return true, pool_get(texture_pool, texture).view;
 }
 
-
-AABB :: struct {
-	min : Vector3;
-	max : Vector3;
-}
-
-OBJECT_NAME_MAX :: 64;
-
-Node_Data :: struct {
-	name            : string;
-	mesh            : Mesh; // 0 = no mesh attached
-	matrix          : Matrix4;
-	children        : []Node;
-	aabb            : AABB;
-	object_id       : Object;
-	gltf_node_index : s32 = -1;
-}
-
-Object_Data :: struct {
-	name            : [OBJECT_NAME_MAX] u8;
-	node            : Node; // source node (for display/reference)
-	meshes          : [] Mesh;
-	matrices        : [] Matrix4;
-	thumbnail       : Gpu_Texture_View;
-	gltf_index      : s32;
-	gltf_node_index : s32;
-}
+// --- private internals ---
 
 #scope_file
 
@@ -877,17 +715,11 @@ Primitive :: struct {
 	material : Gpu_Ptr;
 }
 
-Mesh_Data :: struct {
-	name       : string;
-	primitives : []Primitive;
-}
-
 Texture_Data :: struct {
 	texture : Gpu_Texture;
 	view    : Gpu_Texture_View;
 }
 
-// not gonna use parameters for now. Maybe later
 Material_Data :: struct {
 	albedo   : u32;
 	normal   : u32;
@@ -896,7 +728,7 @@ Material_Data :: struct {
 
 	sampler  : u32;
 	pad0     : u32;
-	base_color_factor : [4] float32; // rgba, default white
+	base_color_factor : [4] float32;
 }
 
 compute_node_aabb :: (node : Node, mesh_aabb_lookup : [] AABB) {
@@ -905,15 +737,31 @@ compute_node_aabb :: (node : Node, mesh_aabb_lookup : [] AABB) {
 	node_data.aabb.min = .{ FLOAT32_MAX,  FLOAT32_MAX,  FLOAT32_MAX};
 	node_data.aabb.max = .{-FLOAT32_MAX, -FLOAT32_MAX, -FLOAT32_MAX};
 
-	// include own mesh AABB (in local space)
 	if node_data.mesh != 0 {
 		mesh_index := (node_data.mesh - 1).(s64);
 		if mesh_index >= 0 && mesh_index < mesh_aabb_lookup.count {
-			aabb_expand(*node_data.aabb, mesh_aabb_lookup[mesh_index]);
+			mesh_aabb := mesh_aabb_lookup[mesh_index];
+			for cx : 0..1 {
+				for cy : 0..1 {
+					for cz : 0..1 {
+						corner := Vector3.{
+							ifx cx == 0 then mesh_aabb.min.x else mesh_aabb.max.x,
+							ifx cy == 0 then mesh_aabb.min.y else mesh_aabb.max.y,
+							ifx cz == 0 then mesh_aabb.min.z else mesh_aabb.max.z,
+						};
+						transformed := (node_data.matrix * make_vector4(corner, 1.0)).xyz;
+						if transformed.x < node_data.aabb.min.x then node_data.aabb.min.x = transformed.x;
+						if transformed.y < node_data.aabb.min.y then node_data.aabb.min.y = transformed.y;
+						if transformed.z < node_data.aabb.min.z then node_data.aabb.min.z = transformed.z;
+						if transformed.x > node_data.aabb.max.x then node_data.aabb.max.x = transformed.x;
+						if transformed.y > node_data.aabb.max.y then node_data.aabb.max.y = transformed.y;
+						if transformed.z > node_data.aabb.max.z then node_data.aabb.max.z = transformed.z;
+					}
+				}
+			}
 		}
 	}
 
-	// recurse into children first, then include their AABBs transformed by child's local matrix
 	for child : node_data.children {
 		compute_node_aabb(child, mesh_aabb_lookup);
 		child_data := pool_get(node_pool, child);
@@ -947,13 +795,6 @@ aabb_expand :: (a : *AABB, b : AABB) {
 	if b.max.z > a.max.z then a.max.z = b.max.z;
 }
 
-flatten_node_tree :: (node : Node, parent_transform : Matrix4 = Matrix4_Identity) -> [] Mesh, [] Matrix4 {
-	meshes   : [..] Mesh;
-	matrices : [..] Matrix4;
-	flatten_node_tree_recursive(node, parent_transform, *meshes, *matrices);
-	return meshes, matrices;
-}
-
 flatten_node_tree_recursive :: (node : Node, parent_transform : Matrix4, meshes : *[..] Mesh, matrices : *[..] Matrix4) {
 	node_data := pool_get(node_pool, node);
 	world := multiply(parent_transform, node_data.matrix);
@@ -968,20 +809,11 @@ flatten_node_tree_recursive :: (node : Node, parent_transform : Matrix4, meshes 
 	}
 }
 
-mesh_pool      : Pool(Mesh, Mesh_Data, 1024);
-texture_pool   : Pool(Texture, Texture_Data, 1024);
-node_pool      : Pool(Node, Node_Data, 1024);
-object_pool    : Pool(Object, Object_Data, 1024);
-
-asset_browser_search : [OBJECT_NAME_MAX] u8;
-
 texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Timeline_Pair) -> bool, Texture {
 	log("importing %...", filepath);
 
 	width, height, channels : s32;
 	pixels : *void;
-
-	// stbi supports png, jpg, bmp, etc.
 
 	pixels = stbi_load(to_c_string(filepath), *width, *height, *channels, 0);
 	defer stbi_image_free(pixels);
@@ -1011,11 +843,8 @@ texture_load_from_file :: (filepath : string, upload_complete_timeline : Gpu_Tim
 	staging, staging_gpu := gpu_malloc(staging_size);
 
 	memcpy(staging, pixels, staging_size);
-	
-    // transfer_queue := gpu_get_queue(.TRANSFER, 0);
-	// if transfer_queue == 0 {
+
 	transfer_queue := gpu_get_queue(.MAIN, 0);
-	// }
     _, cmd_buff := gpu_start_command_recording(transfer_queue);
 
     gpu_enqueue_destroy(cmd_buff, staging_gpu);
@@ -1133,8 +962,8 @@ material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material
 
 	directory := path_strip_filename(filepath);
 
-	material_data : Material_Data; // TODO: Make multithreaded, we already have a semaphore anyways
-	material_data.base_color_factor = .[1, 1, 1, 1]; // default white
+	material_data : Material_Data;
+	material_data.base_color_factor = .[1, 1, 1, 1];
 	{
 		using material_data;
 
@@ -1161,7 +990,7 @@ material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material
 			}
 		}
 
-		sampler = xx gpu_create_sampler(Gpu_Sampler_Desc.{}); // default sampler for now. I think it's fair to assume the material can own one sampler for all its textures
+		sampler = xx gpu_create_sampler(Gpu_Sampler_Desc.{});
 	}
 
 	if upload_timeline_value > 0 {
@@ -1180,73 +1009,42 @@ material_load_from_cgltf :: (filepath : string, material_cgltf : *cgltf_material
 
 result_to_string :: (result : Gpu_Result) -> string {
 	if result == {
-		case .SUCCESS;
-			return "[sgpu] SUCCESS";
-		case .FATAL_MISSING_REQUIRED_EXTENSION;
-			return "[sgpu] FATAL_MISSING_REQUIRED_EXTENSION";
-		case .FATAL_MISSING_REQUIRED_FEATURE;
-			return "[sgpu] FATAL_MISSING_REQUIRED_FEATURE";
-		case .FATAL_NO_SUITABLE_DEVICE_FOUND;
-			return "[sgpu] FATAL_NO_SUITABLE_DEVICE_FOUND";
-		case .FATAL_NO_GRAPHICS_QUEUE;
-			return "[sgpu] FATAL_NO_GRAPHICS_QUEUE";
-		case .FATAL_FAILED_TO_QUERY_QUEUE;
-			return "[sgpu] FATAL_FAILED_TO_QUERY_QUEUE";
-		case .FATAL_OUT_OF_GPU_MEMORY;
-			return "[sgpu] FATAL_OUT_OF_GPU_MEMORY";
-		case .FATAL_OUT_OF_CPU_MEMORY;
-			return "[sgpu] FATAL_OUT_OF_CPU_MEMORY";
-		case .ERROR_MISSING_OPTIONAL_EXTENSION;
-			return "[sgpu] ERROR_MISSING_OPTIONAL_EXTENSION";
-		case .ERROR_COMMAND_BUFFER_LIMIT_EXCEEDED;
-			return "[sgpu] ERROR_COMMAND_BUFFER_LIMIT_EXCEEDED";
-		case .ERROR_TEXTURE_LIMIT_EXCEEDED;
-			return "[sgpu] ERROR_TEXTURE_LIMIT_EXCEEDED";
-		case .ERROR_OUT_OF_BOUNDS;
-			return "[sgpu] ERROR_OUT_OF_BOUNDS";
-		case .ERROR_INVALID_VERTEX_INDEX_SIZE;
-			return "[sgpu] ERROR_INVALID_VERTEX_INDEX_SIZE";
-		case .ERROR_UNKNOWN_GPU_POINTER;
-			return "[sgpu] ERROR_UNKNOWN_GPU_POINTER";
-		case .ERROR_INVALID_BUFFER;
-			return "[sgpu] ERROR_INVALID_BUFFER";
-		case .ERROR_INVALID_TEXTURE;
-			return "[sgpu] ERROR_INVALID_TEXTURE";
-		case .ERROR_INVALID_TEXTURE_VIEW;
-			return "[sgpu] ERROR_INVALID_TEXTURE_VIEW";
-		case .ERROR_INVALID_PIPELINE;
-			return "[sgpu] ERROR_INVALID_PIPELINE";
-		case .FATAL_ERROR_UNKNOWN;
-			return "[sgpu] FATAL_ERROR_UNKNOWN";
-		case;
-			return "[sgpu] unknown";
+		case .SUCCESS;                              return "[sgpu] SUCCESS";
+		case .FATAL_MISSING_REQUIRED_EXTENSION;     return "[sgpu] FATAL_MISSING_REQUIRED_EXTENSION";
+		case .FATAL_MISSING_REQUIRED_FEATURE;       return "[sgpu] FATAL_MISSING_REQUIRED_FEATURE";
+		case .FATAL_NO_SUITABLE_DEVICE_FOUND;       return "[sgpu] FATAL_NO_SUITABLE_DEVICE_FOUND";
+		case .FATAL_NO_GRAPHICS_QUEUE;              return "[sgpu] FATAL_NO_GRAPHICS_QUEUE";
+		case .FATAL_FAILED_TO_QUERY_QUEUE;          return "[sgpu] FATAL_FAILED_TO_QUERY_QUEUE";
+		case .FATAL_OUT_OF_GPU_MEMORY;              return "[sgpu] FATAL_OUT_OF_GPU_MEMORY";
+		case .FATAL_OUT_OF_CPU_MEMORY;              return "[sgpu] FATAL_OUT_OF_CPU_MEMORY";
+		case .ERROR_MISSING_OPTIONAL_EXTENSION;     return "[sgpu] ERROR_MISSING_OPTIONAL_EXTENSION";
+		case .ERROR_COMMAND_BUFFER_LIMIT_EXCEEDED;  return "[sgpu] ERROR_COMMAND_BUFFER_LIMIT_EXCEEDED";
+		case .ERROR_TEXTURE_LIMIT_EXCEEDED;         return "[sgpu] ERROR_TEXTURE_LIMIT_EXCEEDED";
+		case .ERROR_OUT_OF_BOUNDS;                  return "[sgpu] ERROR_OUT_OF_BOUNDS";
+		case .ERROR_INVALID_VERTEX_INDEX_SIZE;      return "[sgpu] ERROR_INVALID_VERTEX_INDEX_SIZE";
+		case .ERROR_UNKNOWN_GPU_POINTER;            return "[sgpu] ERROR_UNKNOWN_GPU_POINTER";
+		case .ERROR_INVALID_BUFFER;                 return "[sgpu] ERROR_INVALID_BUFFER";
+		case .ERROR_INVALID_TEXTURE;                return "[sgpu] ERROR_INVALID_TEXTURE";
+		case .ERROR_INVALID_TEXTURE_VIEW;           return "[sgpu] ERROR_INVALID_TEXTURE_VIEW";
+		case .ERROR_INVALID_PIPELINE;               return "[sgpu] ERROR_INVALID_PIPELINE";
+		case .FATAL_ERROR_UNKNOWN;                  return "[sgpu] FATAL_ERROR_UNKNOWN";
+		case;                                       return "[sgpu] unknown";
 	}
 }
 
 result_to_string :: (result : cgltf_result) -> string {
 	if result == {
-		case .cgltf_result_success;
-			return "[cgltf] success";
-		case .cgltf_result_data_too_short;
-			return "[cgltf] data_too_short";
-		case .cgltf_result_unknown_format;
-			return "[cgltf] unknown_format";
-		case .cgltf_result_invalid_json;
-			return "[cgltf] invalid_json";
-		case .cgltf_result_invalid_gltf;
-			return "[cgltf] invalid_gltf";
-		case .cgltf_result_invalid_options;
-			return "[cgltf] invalid_options";
-		case .cgltf_result_file_not_found;
-			return "[cgltf] file_not_found";
-		case .cgltf_result_io_error;
-			return "[cgltf] io_error";
-		case .cgltf_result_out_of_memory;
-			return "[cgltf] out_of_memory";
-		case .cgltf_result_legacy_gltf;
-			return "[cgltf] legacy_gltf";
-		case;
-			return "[cgltf] unknown";
+		case .cgltf_result_success;         return "[cgltf] success";
+		case .cgltf_result_data_too_short;  return "[cgltf] data_too_short";
+		case .cgltf_result_unknown_format;  return "[cgltf] unknown_format";
+		case .cgltf_result_invalid_json;    return "[cgltf] invalid_json";
+		case .cgltf_result_invalid_gltf;    return "[cgltf] invalid_gltf";
+		case .cgltf_result_invalid_options; return "[cgltf] invalid_options";
+		case .cgltf_result_file_not_found;  return "[cgltf] file_not_found";
+		case .cgltf_result_io_error;        return "[cgltf] io_error";
+		case .cgltf_result_out_of_memory;   return "[cgltf] out_of_memory";
+		case .cgltf_result_legacy_gltf;     return "[cgltf] legacy_gltf";
+		case;                               return "[cgltf] unknown";
 	}
 }
 
@@ -1261,7 +1059,7 @@ result_to_string :: (result : cgltf_result) -> string {
 
 #scope_export
 
-// -- test helpers (expose #scope_file internals for tests.jai) --
+// -- test helpers --
 
 get_node_data :: (node : Node) -> *Node_Data {
 	return pool_get(node_pool, node);

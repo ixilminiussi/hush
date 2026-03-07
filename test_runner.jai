@@ -40,6 +40,7 @@ Frame_Data :: struct {
 	view_mode           : s32;
 }
 
+#load "simd.jai";
 #load "assets.jai";
 #load "tests.jai";
 #load "camera.jai";

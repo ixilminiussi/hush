@@ -110,7 +110,8 @@ test_create_object :: () {
 	obj : Object_Data;
 	obj.node = target_node;
 	obj.meshes = meshes;
-	obj.matrices = matrices;
+	obj.matrices_soa = flatten_to_soa(matrices);
+	obj.mesh_count = xx matrices.count;
 	name_str := "test_object";
 	memcpy(obj.name.data, name_str.data, name_str.count);
 	obj.name[name_str.count] = 0;
@@ -138,7 +139,8 @@ test_delete_object :: () {
 	obj : Object_Data;
 	obj.node = target_node;
 	obj.meshes = meshes;
-	obj.matrices = matrices;
+	obj.matrices_soa = flatten_to_soa(matrices);
+	obj.mesh_count = xx matrices.count;
 
 	object_id := create_object(obj);
 	test_assert("delete object: created successfully", cast(s64)object_id > 0);
@@ -166,7 +168,8 @@ test_multiple_objects :: () {
 		obj : Object_Data;
 		obj.node = target_node;
 		obj.meshes = meshes;
-		obj.matrices = matrices;
+		obj.matrices_soa = flatten_to_soa(matrices);
+	obj.mesh_count = xx matrices.count;
 		ids[i] = create_object(obj);
 	}
 

@@ -4,20 +4,68 @@ terrain_init :: (raster_desc : Gpu_Raster_Desc) {
 	success=, terrain_pixel_spv := compile_shader("shaders/terrain_ps.slang", "", true);
 	assert(success);
 
-	pipeline = gpu_create_graphics_pipeline(terrain_vertex_spv, terrain_pixel_spv, raster_desc);
+	terrain_pipeline = gpu_create_graphics_pipeline(terrain_vertex_spv, terrain_pixel_spv, raster_desc);
 
-	success=, heightmap_view = texture_load_from_file_one_time(tprint("%assets/terrain/heightmap.png", #filepath));
+	// load heightmap CPU data for terrain_get_height
+	heightmap_path := tprint("%assets/terrain/heightmap.png", #filepath);
+	heightmap_pixels = stbi_load(to_c_string(heightmap_path), *heightmap_width, *heightmap_height, *heightmap_channels, 1);
+	assert(heightmap_pixels != null);
+
+	success=, heightmap_view = texture_load_from_file_one_time(heightmap_path);
 	assert(success);
 	success=, diffuse_view = texture_load_from_file_one_time(tprint("%assets/terrain/diffuse.png", #filepath));
 	assert(success);
 }
 
 terrain_free :: () {
-	gpu_free_pipeline(pipeline);
+	gpu_free_pipeline(terrain_pipeline);
+	if heightmap_pixels != null then stbi_image_free(heightmap_pixels);
+}
+
+// returns the terrain height at a given world-space (x, z) position
+terrain_get_height :: (wx : float, wz : float) -> float {
+	using terrain_settings;
+
+	// world position to UV (same mapping as the vertex shader)
+	u := wx / scale + 0.5;
+	v := wz / scale + 0.5;
+
+	// clamp to [0, 1]
+	if u < 0 then u = 0;
+	if u > 1 then u = 1;
+	if v < 0 then v = 0;
+	if v > 1 then v = 1;
+
+	// pixel coordinates (bilinear sampling)
+	px := u * cast(float)(heightmap_width  - 1);
+	py := v * cast(float)(heightmap_height - 1);
+
+	x0 := cast(s32) px;
+	y0 := cast(s32) py;
+	x1 := min(x0 + 1, heightmap_width  - 1);
+	y1 := min(y0 + 1, heightmap_height - 1);
+
+	fx := px - cast(float) x0;
+	fy := py - cast(float) y0;
+
+	sample :: (pixels : *u8, w : s32, x : s32, y : s32) -> float {
+		return cast(float) pixels[y * w + x] / 255.0;
+	}
+
+	h00 := sample(heightmap_pixels, heightmap_width, x0, y0);
+	h10 := sample(heightmap_pixels, heightmap_width, x1, y0);
+	h01 := sample(heightmap_pixels, heightmap_width, x0, y1);
+	h11 := sample(heightmap_pixels, heightmap_width, x1, y1);
+
+	h := h00 * (1 - fx) * (1 - fy) + h10 * fx * (1 - fy) + h01 * (1 - fx) * fy + h11 * fx * fy;
+
+	return y_offset - h * height_scale;
 }
 
 terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_gpu : Gpu_Ptr, camera_position : Vector3, sampler : Gpu_Sampler) {
-	gpu_set_pipeline(cmd_buff, pipeline);
+	using terrain_settings;
+
+	gpu_set_pipeline(cmd_buff, terrain_pipeline);
 
 	chunk_res_x := resolution[0] / chunks[0];
 	chunk_res_y := resolution[1] / chunks[1];
@@ -52,6 +100,8 @@ terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_g
 }
 
 terrain_imgui :: () {
+	using terrain_settings;
+
 	if ImGui.Begin("Terrain") {
 		ImGui.SliderInt2("Resolution", *resolution, 2, 512);
 		ImGui.SliderFloat("Scale", *scale, 1.0, 500.0);
@@ -75,19 +125,14 @@ terrain_imgui :: () {
 
 #scope_file
 
-pipeline : Gpu_Pipeline;
+terrain_pipeline : Gpu_Pipeline;
 
-heightmap_view : Gpu_Texture_View;
-diffuse_view   : Gpu_Texture_View;
-
-resolution : [2]s32 = .[256, 256];
-chunks     : [2]s32 = .[8, 8];
-scale         : float32 = 400.0;
-height_scale  : float32 = 20.0;
-y_offset      : float32 = 5.0;
-lod_levels    : s32 = 4;
-lod_distance  : float32 = 200.0;
-debug_view    : s32 = 0;
+heightmap_view     : Gpu_Texture_View;
+diffuse_view       : Gpu_Texture_View;
+heightmap_pixels   : *u8;
+heightmap_width    : s32;
+heightmap_height   : s32;
+heightmap_channels : s32;
 
 Terrain_VS_Data :: struct {
 	frame_data    : Gpu_Ptr;

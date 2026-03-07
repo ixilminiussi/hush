@@ -17,7 +17,7 @@
 
     compiler_begin_intercept(w);
 
-    add_build_file(tprint("%.jai", "renderer"), w);
+    add_build_file(tprint("%.jai", "main"), w);
 
     copy_module_libraries_to_target("bin");
 

@@ -2,6 +2,21 @@ is_key_down :: (key_code : SDL.SDL_Scancode) -> bool {
 	return SDL.SDL_GetKeyboardState(null)[key_code] != 0;
 }
 
+is_key_tapped :: (key_code : SDL.SDL_Scancode) -> bool {
+	val, new := find_or_add(*key_state_map, key_code);
+	if new {
+		val.* = is_key_down(key_code);
+		return val.*;
+	} else {
+		old_value := val.*;
+		val.* = is_key_down(key_code);
+		if old_value != val.* && val.* == true {
+			return true;
+		}
+		return false;
+	}
+}
+
 is_mouse_button_down :: (button : u8) -> bool {
 	return SDL.SDL_GetMouseState(null, null) & SDL.SDL_BUTTON(button) != 0;
 }
@@ -81,6 +96,8 @@ get_mouse_position :: () -> s32, s32 {
 
 #scope_file
 
+key_state_map : Table(SDL.SDL_Scancode, bool);
+
 SDL :: #import "SDL";
 
 mouse_capture      : bool;
@@ -94,3 +111,4 @@ mouse_scroll       : Vector2;
 frame_events : [..]SDL.SDL_Event;
 
 #import "Math";
+#import "Hash_Table";
