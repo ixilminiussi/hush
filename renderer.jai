@@ -135,7 +135,7 @@ main :: () {
 	world_scene := create_node(0);
 
 	active_scene := world_scene;
-	show_gym := false;
+	show_gym := true;
 	view_mode : s32 = 0;
 	view_mode_names :: string.["Shaded", "Albedo", "Normal", "CSM"];
 	current_view_label := view_mode_names[0];
@@ -143,7 +143,7 @@ main :: () {
 	// viewport
 	{
 		using viewport_camera;
-		position      = .{0., 5., 0.};
+		position      = .{5., 0., 0.};
 		look_dir      = .{0.5, 0.5, 0.5};
 		view_distance = 200;
 		fov           = 30.;
