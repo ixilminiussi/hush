@@ -4,6 +4,7 @@ import "frame_data_definitions";
 struct VS_Output {
     float4 position : SV_POSITION;
     float2 uv       : TEXCOORD0;
+	float3 color    : COLOR0;
 
 	float4 sm_positions[4];
 	float3 w_ray;
@@ -20,6 +21,7 @@ struct Vertex {
 struct Draw_Data {
 	Vertex* vertex_buffer;
 	Frame_Data* frame_data;
+	float4x4 model;
 }
 
 [vk::push_constant]
@@ -32,10 +34,13 @@ VS_Output main(uint vertex_id: SV_VertexID) {
 	Frame_Data *frame_data = sp.get().frame_data;
 	Vertex vertex = sp.get().vertex_buffer[vertex_id];
 
-	float3 w_position = vertex.position;
+	float4x4 model = sp.get().model;
+	float3 w_position = mul(model, float4(vertex.position, 1.)).xyz;
+	float3 w_normal   = normalize(mul((float3x3)model, vertex.normal));
 
     output.position = mul(frame_data->viewport_view_projection, float4(w_position, 1.));
 	output.uv       = vertex.uv;
+	output.color    = vertex.color;
 	output.w_ray    = w_position - frame_data.viewport_camera_position;
 
 	for (int i = 0; i < 4; i ++) {

@@ -16,6 +16,7 @@ struct Vertex {
 struct Draw_Data {
 	Vertex* vertex_buffer;
 	Frame_Data* frame_data;
+	float4x4 model;
 	int shadow_map_index;
 }
 
@@ -29,9 +30,10 @@ VS_Output main(uint vertex_id: SV_VertexID) {
 	Frame_Data *data = sp.get().frame_data;
 	Vertex vertex = sp.get().vertex_buffer[vertex_id];
 
+	float4x4 model = sp.get().model;
 	int index = sp.get().shadow_map_index;
 
-	float3 w_position = vertex.position;
+	float3 w_position = mul(model, float4(vertex.position, 1.)).xyz;
 
     output.position = mul(data->sun_view_projections[index], float4(w_position, 1.));
     return output;

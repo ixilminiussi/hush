@@ -7,24 +7,43 @@ static const float EPS = 0.00001;
 struct PS_Input {
 	float3 position : SV_POSITION;
     float2 uv : TEXCOORD0;
+	float3 color : COLOR0;
 
 	float4 sm_positions[4];
 	float3 w_ray;
 }
 
-struct Material_Data { 
-	TextureHandle2D albedo; 
+struct Material_Data {
+	TextureHandle2D albedo;
 	TextureHandle2D normal;
-	TextureHandle2D orm; 
+	TextureHandle2D orm;
 	TextureHandle2D specular;
 
 	SamplerHandle sampler;
-	uint3 pad0;
+	uint pad0;
+	float4 base_color_factor;
 }
 
 struct PS_Params {
     Material_Data* material;
 	Frame_Data* frame_data;
+	uint object_id;
+}
+
+struct PS_Output {
+	float4 color   : SV_Target0;
+	float4 id      : SV_Target1;
+}
+
+float3 hash_id_to_color(uint id) {
+	uint h = id;
+	h = ((h >> 16) ^ h) * 0x45d9f3b;
+	h = ((h >> 16) ^ h) * 0x45d9f3b;
+	h = (h >> 16) ^ h;
+	float r = float((h >> 0) & 0xFF) / 255.0;
+	float g = float((h >> 8) & 0xFF) / 255.0;
+	float b = float((h >> 16) & 0xFF) / 255.0;
+	return float3(r, g, b);
 }
 
 [vk::push_constant]
@@ -32,16 +51,29 @@ PixelParams<PS_Params> p;
 
 
 [shader("pixel")]
-float4 main(PS_Input input) : SV_Target0 {
+PS_Output main(PS_Input input) {
 	Frame_Data *frame_data   = p.get().frame_data;
 	let material = p.get().material;
+	uint object_id = p.get().object_id;
 
-	float3 albedo = material.albedo.Sample(material.sampler, input.uv).rgb;
-	float3 orm    = material.orm.Sample(material.sampler, input.uv).rgb;
+	PS_Output output;
+	output.id = float4(hash_id_to_color(object_id), 1.0);
 
-	float occlusion = orm.r;
-	float roughness = orm.g;
-	float metallic  = orm.b;
+	float3 albedo;
+	if (reinterpret<uint>(material.albedo) != 0)
+		albedo = material.albedo.Sample(material.sampler, input.uv).rgb * material.base_color_factor.rgb;
+	else
+		albedo = input.color * material.base_color_factor.rgb;
+
+	float occlusion = 1.0;
+	float roughness = 0.5;
+	float metallic  = 0.0;
+	if (reinterpret<uint>(material.orm) != 0) {
+		float3 orm = material.orm.Sample(material.sampler, input.uv).rgb;
+		occlusion = orm.r;
+		roughness = orm.g;
+		metallic  = orm.b;
+	}
 
 	float2 resolution = frame_data.prepass.GetDimensions();
 	float2 screen_uv = input.position.xy / resolution;
@@ -79,13 +111,17 @@ float4 main(PS_Input input) : SV_Target0 {
 	// shadow map END
 	
 	float light = min(1. - float(is_occluded), NdotL);
+	light *= 3.0;
+	const float AMBIENT = 0.4;
 
-	// view modes: 0=shaded, 1=albedo, 2=mesh, 3=csm
+	// view modes: 0=shaded, 1=albedo, 2=mesh, 3=csm, 4=id
 	if (frame_data.view_mode == 1) {
-		return float4(albedo, 1.);
+		output.color = float4(albedo, 1.);
+		return output;
 	}
 	if (frame_data.view_mode == 2) {
-		return float4(N * 0.5 + 0.5, 1.);
+		output.color = float4(N * 0.5 + 0.5, 1.);
+		return output;
 	}
 	if (frame_data.view_mode == 3) {
 		float3 csm_colors[4] = {
@@ -101,9 +137,15 @@ float4 main(PS_Input input) : SV_Target0 {
 				break;
 			}
 		}
-		return float4(albedo * csm_color * max(light, 0.1), 1.);
+		output.color = float4(albedo * csm_color * max(light, AMBIENT), 1.);
+		return output;
+	}
+	if (frame_data.view_mode == 4) {
+		output.color = output.id;
+		return output;
 	}
 
-	return float4(albedo * max(light, 0.1), 1.);
+	output.color = float4(albedo * max(light, AMBIENT), 1.);
+	return output;
 }
 

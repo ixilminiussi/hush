@@ -6,14 +6,15 @@ struct PS_Input {
 	float3 normal;
 }
 
-struct Material_Data { 
-	TextureHandle2D albedo; 
+struct Material_Data {
+	TextureHandle2D albedo;
 	TextureHandle2D normal;
-	TextureHandle2D orm; 
+	TextureHandle2D orm;
 	TextureHandle2D specular;
 
 	SamplerHandle sampler;
-	uint3 pad0;
+	uint pad0;
+	float4 base_color_factor;
 }
 
 struct PS_Params {

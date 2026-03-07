@@ -53,6 +53,7 @@ load_imgui_style :: () {
 
 	io.Fonts.TexID = cast(ImGui.ImTextureID) font_texture_view;
 
+	SDL.SDL_StartTextInput();
 }
 
 resize_imgui_window :: (width : s32, height : s32) {
@@ -83,6 +84,25 @@ update_imgui_events :: (delta_time : float) {
 
 			case .SDL_MOUSEWHEEL;
 				io.AddMouseWheelEvent(io, xx it.wheel.x, xx it.wheel.y);
+
+			case .SDL_KEYDOWN; #through;
+			case .SDL_KEYUP;
+				down := it.type == .SDL_KEYDOWN;
+				scancode := it.key.keysym.scancode;
+
+				mods := it.key.keysym.mod;
+				io.AddKeyEvent(io, .ImGuiMod_Ctrl,  (mods & .KMOD_CTRL)  != 0);
+				io.AddKeyEvent(io, .ImGuiMod_Shift, (mods & .KMOD_SHIFT) != 0);
+				io.AddKeyEvent(io, .ImGuiMod_Alt,   (mods & .KMOD_ALT)   != 0);
+				io.AddKeyEvent(io, .ImGuiMod_Super, (mods & .KMOD_GUI)   != 0);
+
+				imgui_key := sdl_scancode_to_imgui_key(scancode);
+				if imgui_key != .None {
+					io.AddKeyEvent(io, imgui_key, down);
+				}
+
+			case .SDL_TEXTINPUT;
+				io.AddInputCharactersUTF8(io, cast(*u8) it.text.text.data);
 		}
 	}
 	clear_frame_events();
@@ -234,7 +254,8 @@ reset_imgui_arenas :: () {
 }
 
 ImGui :: #import "ImGui";
-Icons :: #import "icons_material_symbols"; 
+ImGuizmo :: #import "imguizmo";
+Icons :: #import "icons_material_symbols";
 
 #scope_file
 
@@ -265,3 +286,38 @@ ImGui_Pixel_Params :: struct {
 
 imgui_pipeline : Gpu_Pipeline;
 imgui_sampler  : Gpu_Sampler;
+
+sdl_scancode_to_imgui_key :: (scancode : SDL.SDL_Scancode) -> ImGui.Key {
+	if scancode == {
+		case .SDL_SCANCODE_TAB;          return .Tab;
+		case .SDL_SCANCODE_LEFT;         return .LeftArrow;
+		case .SDL_SCANCODE_RIGHT;        return .RightArrow;
+		case .SDL_SCANCODE_UP;           return .UpArrow;
+		case .SDL_SCANCODE_DOWN;         return .DownArrow;
+		case .SDL_SCANCODE_PAGEUP;       return .PageUp;
+		case .SDL_SCANCODE_PAGEDOWN;     return .PageDown;
+		case .SDL_SCANCODE_HOME;         return .Home;
+		case .SDL_SCANCODE_END;          return .End;
+		case .SDL_SCANCODE_INSERT;       return .Insert;
+		case .SDL_SCANCODE_DELETE;       return .Delete;
+		case .SDL_SCANCODE_BACKSPACE;    return .Backspace;
+		case .SDL_SCANCODE_SPACE;        return .Space;
+		case .SDL_SCANCODE_RETURN;       return .Enter;
+		case .SDL_SCANCODE_ESCAPE;       return .Escape;
+		case .SDL_SCANCODE_LCTRL;        return .LeftCtrl;
+		case .SDL_SCANCODE_LSHIFT;       return .LeftShift;
+		case .SDL_SCANCODE_LALT;         return .LeftAlt;
+		case .SDL_SCANCODE_LGUI;         return .LeftSuper;
+		case .SDL_SCANCODE_RCTRL;        return .RightCtrl;
+		case .SDL_SCANCODE_RSHIFT;       return .RightShift;
+		case .SDL_SCANCODE_RALT;         return .RightAlt;
+		case .SDL_SCANCODE_RGUI;         return .RightSuper;
+		case .SDL_SCANCODE_A;            return .A;
+		case .SDL_SCANCODE_C;            return .C;
+		case .SDL_SCANCODE_V;            return .V;
+		case .SDL_SCANCODE_X;            return .X;
+		case .SDL_SCANCODE_Y;            return .Y;
+		case .SDL_SCANCODE_Z;            return .Z;
+		case;                            return .None;
+	}
+}

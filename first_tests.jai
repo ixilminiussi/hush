@@ -3,10 +3,10 @@
 
     make_directory_if_it_does_not_exist("bin");
 
-    w := compiler_create_workspace("hush");
+    w := compiler_create_workspace("hush_tests");
     options := get_build_options();
     options.output_type = .EXECUTABLE;
-    options.output_executable_name = "hush";
+    options.output_executable_name = "hush_tests";
     options.output_path = "bin";
 
     if OS == .LINUX {
@@ -15,48 +15,9 @@
 
     set_build_options(options, w);
 
-    compiler_begin_intercept(w);
-
-    add_build_file(tprint("%.jai", "renderer"), w);
+    add_build_file("test_runner.jai", w);
 
     copy_module_libraries_to_target("bin");
-
-    // scan for @console notes and generate the command table
-    console_entries : [..] string;
-
-    while true {
-        message := compiler_wait_for_message();
-        if !message then break;
-        if message.workspace != w then continue;
-
-        if message.kind == .TYPECHECKED {
-            tc := cast(*Message_Typechecked) message;
-            for tc.procedure_headers {
-                header := it.expression;
-                for header.notes {
-                    if it.text == "console" {
-                        array_add(*console_entries, copy_string(header.name));
-                    }
-                }
-            }
-        }
-
-        if message.kind == .PHASE {
-            phase := cast(*Message_Phase) message;
-            if phase.phase == .TYPECHECKED_ALL_WE_CAN {
-                builder : String_Builder;
-                append(*builder, "console_commands :: Console_Command.[\n");
-                for console_entries {
-                    print_to_builder(*builder, "    .{\"%\", %},\n", it, it);
-                }
-                append(*builder, "];\n");
-                add_build_string(builder_to_string(*builder), w);
-                break;
-            }
-        }
-    }
-
-    compiler_end_intercept(w);
 }
 
 gcc_lib_dir :: () -> string {
@@ -113,4 +74,3 @@ copy_module_libraries_to_target :: (output_path: string) {
 #import "Compiler";
 #import "File";
 #import "File_Utilities";
-

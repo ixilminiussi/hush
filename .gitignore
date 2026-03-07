@@ -1,2 +1,4 @@
 bin/
 .build/
+assets/terrain/diffuse.png
+assets/terrain/heightmap.png

@@ -95,12 +95,13 @@ build_cascade_splits :: (using shadow_map_camera : *Shadow_Map_Camera($N), view_
 	}
 }
 
-build_view_projections :: (using shadow_map_camera : *Shadow_Map_Camera($N), center : Vector3, depth_ratio := 4.0) {
+build_view_projections :: (using shadow_map_camera : *Shadow_Map_Camera($N), center : Vector3, depth_ratio := 4.0, margin := 10.) {
 	for *view_projection : view_projections {
 		radius   := cascade_splits[it_index];
-		position := center - normalize(direction) * radius;
+		extent   := radius + margin;
+		position := center - normalize(direction) * extent;
 
-		projection := orthographic_projection_matrix(-radius, radius, -radius, radius, -radius * depth_ratio, radius * depth_ratio);
+		projection := orthographic_projection_matrix(-extent, extent, -extent, extent, -extent * depth_ratio, extent * depth_ratio);
 		view       := make_look_at_matrix(position, center, .{0., -1. ,0.}, false);
 
 		view_projection.* = projection * view;

@@ -36,7 +36,7 @@ main :: () {
 	_, shadow_map_texture := gpu_create_texture(.{
 		format      = .D16_UNORM,
 		usage       = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED,
-		dimensions  = .[xx 2048, xx 2048, 1],
+		dimensions  = .[xx 4096, xx 4096, 1],
 		layer_count = 4
 	});
 	shadow_map_views : [SHADOW_MAP_SPLIT_COUNT] Gpu_Texture_View;
@@ -61,6 +61,13 @@ main :: () {
 		dimensions = .[xx width, xx height, 1]
 	});
 	prepass_view := gpu_texture_view(prepass_texture);
+
+	_, id_texture := gpu_create_texture(.{
+		format     = .B8G8R8A8_SRGB,
+		usage      = .COLOR_ATTACHMENT | .SAMPLED,
+		dimensions = .[xx width, xx height, 1]
+	});
+	id_view := gpu_texture_view(id_texture);
 
 	default_sampler := gpu_create_sampler(.{});
 
@@ -95,12 +102,21 @@ main :: () {
     prepass_pipeline := gpu_create_graphics_pipeline(prepass_vertex_spv, prepass_pixel_spv, raster_desc);
     defer gpu_free_pipeline(prepass_pipeline);
 
+	forward_raster_desc := Gpu_Raster_Desc.{
+        cull = .CW,
+        color_targets = .[
+            .{format = .B8G8R8A8_SRGB},
+            .{format = .B8G8R8A8_SRGB}
+        ],
+        blend_state = *blend_state,
+    };
+
 	success=, forward_vertex_spv := compile_shader("shaders/forward_vs.slang", "", true);
     assert(success);
     success=, forward_pixel_spv := compile_shader("shaders/forward_ps.slang", "", true);
     assert(success);
 
-    forward_pipeline := gpu_create_graphics_pipeline(forward_vertex_spv, forward_pixel_spv, raster_desc);
+    forward_pipeline := gpu_create_graphics_pipeline(forward_vertex_spv, forward_pixel_spv, forward_raster_desc);
     defer gpu_free_pipeline(forward_pipeline);
 
     // terrain_pipeline := gpu_create_graphics_pipeline(terrain_vertex_spv, terrain_pixel_spv, raster_desc);
@@ -115,7 +131,7 @@ main :: () {
 
 	for 0..MAX_FRAMES_IN_FLIGHT-1 {
 		frame_arenas[it]    = gpu_make_arena(512);
-		draw_arenas[it]     = gpu_make_arena(65536);
+		draw_arenas[it]     = gpu_make_arena(4 * 1024 * 1024);
 		frame_timelines[it] = .{gpu_create_semaphore(0), 0};
 	}
 	defer for 0..MAX_FRAMES_IN_FLIGHT-1 {
@@ -127,24 +143,25 @@ main :: () {
 	asset_manager_initialize();
 	defer asset_manager_free();
 
-	// asset gym
-	success=, gym_scene := import_gltf(tprint("%assets/Creature/Creature_Substance.gltf", #filepath));
-	assert(success);
+
+	load_project("project.hush", prepass_pipeline, main_queue);
 
 	// world scene (empty by default)
 	world_scene := create_node(0);
 
-	active_scene := world_scene;
-	show_gym := true;
+	current_gym_index : s32 = 0;
+	active_scene := ifx loaded_gltfs.count > 0 then loaded_gltfs[0].scene else world_scene;
+	show_gym := loaded_gltfs.count > 0;
+	pending_import_path : string;
 	view_mode : s32 = 0;
-	view_mode_names :: string.["Shaded", "Albedo", "Normal", "CSM"];
+	view_mode_names :: string.["Shaded", "Albedo", "Normal", "CSM", "ID"];
 	current_view_label := view_mode_names[0];
 
 	// viewport
 	{
 		using viewport_camera;
 		position      = .{5., 0., 0.};
-		look_dir      = .{0.5, 0.5, 0.5};
+		look_dir      = .{-1., 0., 0.};
 		view_distance = 200;
 		fov           = 30.;
 	}
@@ -153,7 +170,7 @@ main :: () {
 
 	// shadow map camera
 	shadow_map_camera : Shadow_Map_Camera(SHADOW_MAP_SPLIT_COUNT) = {
-		direction = normalize(Vector3.{1.0, -0.5, -0.3})
+		direction = normalize(Vector3.{-1.0, -0.5, 0.3})
 	};
 	build_cascade_splits(*shadow_map_camera, viewport_camera.view_distance, 0.9);
 
@@ -165,6 +182,19 @@ main :: () {
 		dt : float64 = new_time - last_time;
 		last_time = new_time;
 
+		// handle deferred gltf import (must happen outside GPU recording)
+		if pending_import_path.count > 0 {
+			gpu_wait_idle();
+			success, scene := import_gltf(pending_import_path);
+			if success {
+				gltf_idx := register_gltf(pending_import_path, scene);
+				current_gym_index = gltf_idx;
+				active_scene = scene;
+				save_project("project.hush");
+			}
+			pending_import_path = "";
+		}
+
 		quit=, resized := poll_events();
 
         if resized {
@@ -172,6 +202,7 @@ main :: () {
 
 			gpu_free(depth_texture);
 			gpu_free(prepass_texture);
+			gpu_free(id_texture);
 
 			width=, height= := get_sdl_window_size(sdl_window);
 
@@ -191,6 +222,13 @@ main :: () {
 			});
 			prepass_view = gpu_texture_view(prepass_texture);
 
+			_, id_texture = gpu_create_texture(.{
+				format     = .B8G8R8A8_SRGB,
+				usage      = .COLOR_ATTACHMENT | .SAMPLED,
+				dimensions = .[cast(u32)width, cast(u32)height, 1]
+			});
+			id_view = gpu_texture_view(id_texture);
+
 			update_projection(*viewport_camera, cast(float32)width / cast(float32)height);
         }
 
@@ -206,26 +244,26 @@ main :: () {
 			rotate_viewport_camera(*viewport_camera, .{dir.x, -dir.y} * cast(float32)dt, .{0., 1., 0.});
 		}
 
-		if is_key_down(SDL.SDL_SCANCODE_W) {
+		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_W) {
 			using viewport_camera;
 			position += look_dir * dt * MOVE_SPEED;
 			moved = true;
 		}
 
-		if is_key_down(SDL.SDL_SCANCODE_S) {
+		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_S) {
 			using viewport_camera;
 			position += -look_dir * dt * MOVE_SPEED;
 			moved = true;
 		}
 
-		if is_key_down(SDL.SDL_SCANCODE_D) {
+		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_D) {
 			using viewport_camera;
 			right := -cross_product(UP, look_dir);
 			position += right * dt * MOVE_SPEED;
 			moved = true;
 		}
 
-		if is_key_down(SDL.SDL_SCANCODE_A) {
+		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_A) {
 			using viewport_camera;
 			left := cross_product(UP, look_dir);
 			position += left * dt * MOVE_SPEED;
@@ -340,6 +378,12 @@ main :: () {
 					load_op = .CLEAR,
 					store_op = .STORE,
 					clear_color._float = .[0, 0, 0, 1],
+				},
+				.{
+					view = id_view,
+					load_op = .CLEAR,
+					store_op = .STORE,
+					clear_color._float = .[0, 0, 0, 0],
 				}
 			]
 		});
@@ -422,6 +466,16 @@ main :: () {
 		ImGui.NewFrame();
 
 		if ImGui.BeginMainMenuBar() {
+			if ImGui.BeginMenu("File") {
+				if ImGui.MenuItem("Save") {
+					save_project("project.hush");
+				}
+				if ImGui.MenuItem("Load") {
+					load_project("project.hush", prepass_pipeline, main_queue);
+				}
+				ImGui.EndMenu();
+			}
+
 			avail := ImGui.GetContentRegionAvail().x;
 			ImGui.SetCursorPosX(avail - 80);
 			if ImGui.BeginMenu(to_c_string(current_view_label)) {
@@ -462,16 +516,72 @@ main :: () {
 					show_gym = false;
 					active_scene = world_scene;
 				}
-				ImGui.Separator();
-				draw_scene_tree(gym_scene, 0);
+
+				ImGui.SameLine();
+				if ImGui.Button("Import GLTF...") {
+					path := open_file_dialog("Import GLTF", tprint("%assets/", #filepath), "*.gltf *.glb");
+					if path.count > 0 {
+						pending_import_path = path;
+					}
+				}
+
+				// tab bar for loaded gltfs
+				if loaded_gltfs.count > 0 {
+					if ImGui.BeginTabBar("##gym_tabs") {
+						gltf_to_remove : s32 = -1;
+						for entry, i : loaded_gltfs {
+							display_name := gltf_display_name(entry.filepath);
+							tab_label := to_c_string(tprint("%##gltf_%", display_name, i));
+							open : bool = true;
+							if ImGui.BeginTabItem(tab_label, *open) {
+								if current_gym_index != cast(s32) i {
+									current_gym_index = cast(s32) i;
+									active_scene = entry.scene;
+								}
+								ImGui.EndTabItem();
+							}
+							if !open then gltf_to_remove = cast(s32) i;
+						}
+						ImGui.EndTabBar();
+
+						if gltf_to_remove >= 0 {
+							unregister_gltf(gltf_to_remove);
+							if loaded_gltfs.count == 0 {
+								show_gym = false;
+								active_scene = world_scene;
+							} else {
+								current_gym_index = min(current_gym_index, cast(s32)loaded_gltfs.count - 1);
+								active_scene = loaded_gltfs[current_gym_index].scene;
+							}
+						}
+					}
+
+					if loaded_gltfs.count > 0 {
+						ImGui.Separator();
+						draw_asset_manager(loaded_gltfs[current_gym_index].scene, current_gym_index, prepass_pipeline, main_queue);
+					}
+				}
 			} else {
 				if ImGui.Button("Open Asset Gym") {
 					show_gym = true;
-					active_scene = gym_scene;
+					if loaded_gltfs.count > 0 {
+						active_scene = loaded_gltfs[current_gym_index].scene;
+					}
 				}
 			}
 		}
 		ImGui.End();
+
+		if show_gym then draw_object_library();
+		if !show_gym then draw_asset_browser();
+
+
+		if selected_node != 0 {
+			aabb := get_node_bounding_box(selected_node);
+			draw_bounding_box(aabb, viewport_camera.camera, cast(float)width, cast(float)height);
+		}
+
+		draw_console();
 
 		ImGui.EndFrame();
 
@@ -485,22 +595,6 @@ main :: () {
 
     gpu_wait_idle();
 }
-
-#scope_file
-
-sdl_window : *SDL.SDL_Window;
-window : u64;
-
-viewport_camera : Viewport_Camera;
-
-MOVE_SPEED :: 5;
-
-UP :: Vector3.{0., 1., 0.};
-
-move_forward  := false;
-move_backward := false;
-move_left     := false;
-move_right    := false;
 
 Frame_Data :: struct {
 	prepass : u32;
@@ -519,8 +613,43 @@ Frame_Data :: struct {
 
 SHADOW_MAP_SPLIT_COUNT :: 4;
 
+// -- console commands --
+
+hello :: (args: [] string) {
+	if args.count > 0 {
+		console_print("hello, %!", args[0]);
+	} else {
+		console_print("hello, world!");
+	}
+} @console
+
+save :: (args: [] string) {
+	if save_project("project.hush") {
+		console_print("project saved.");
+	} else {
+		console_print("failed to save project.");
+	}
+} @console
+
+#scope_file
+
+sdl_window : *SDL.SDL_Window;
+window : u64;
+
+viewport_camera : Viewport_Camera;
+
+MOVE_SPEED :: 5;
+
+UP :: Vector3.{0., 1., 0.};
+
+move_forward  := false;
+move_backward := false;
+move_left     := false;
+move_right    := false;
+
 #load "assets.jai";
 #load "camera.jai";
+#load "console.jai";
 #load "imgui.jai";
 #load "input-manager.jai";
 #load "window.jai";
