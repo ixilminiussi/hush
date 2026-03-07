@@ -7,6 +7,14 @@ Editor_View :: enum u8 {
 
 editor_view := Editor_View.WORLD;
 
+show_gym            := true;
+show_object_library := true;
+show_terrain        := true;
+show_debug_view     := true;
+show_asset_browser  := true;
+show_world_objects  := true;
+show_console        := false;
+
 editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height : s32) {
 	if ImGui.BeginMainMenuBar() {
 		if ImGui.BeginMenu("File") {
@@ -16,6 +24,21 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 			if ImGui.MenuItem("Load") {
 				load_project("project.hush", pipeline, queue);
 			}
+			ImGui.EndMenu();
+		}
+
+		if ImGui.BeginMenu("Windows") {
+			if editor_view == .GYM {
+				ImGui.MenuItem("Gym", null, *show_gym);
+				ImGui.MenuItem("Object Library", null, *show_object_library);
+			} else if editor_view == .WORLD {
+				ImGui.MenuItem("Terrain", null, *show_terrain);
+				ImGui.MenuItem("Debug View", null, *show_debug_view);
+				ImGui.MenuItem("Assets", null, *show_asset_browser);
+				ImGui.MenuItem("World Objects", null, *show_world_objects);
+			}
+			ImGui.Separator();
+			ImGui.MenuItem("Console", null, *show_console);
 			ImGui.EndMenu();
 		}
 
@@ -40,53 +63,8 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 
 	if editor_view == {
 		case .GYM;
-			ImGui.Begin("Gym");
-			ImGui.SameLine();
-			if ImGui.Button("Import GLTF...") {
-				path := open_file_dialog("Import GLTF", tprint("%assets/", #filepath), "*.gltf *.glb");
-				if path.count > 0 {
-					gpu_wait_idle();
-					success, scene := import_gltf(path);
-					if success {
-						gltf_idx := register_gltf(path, scene);
-						current_gym_index = gltf_idx;
-					}
-				}
-			}
-
-			if loaded_gltfs.count > 0 {
-				if ImGui.BeginTabBar("##gym_tabs") {
-					gltf_to_remove : s32 = -1;
-					for entry, i : loaded_gltfs {
-						display_name := gltf_display_name(entry.filepath);
-						tab_label := to_c_string(tprint("%##gltf_%", display_name, i));
-						open : bool = true;
-						if ImGui.BeginTabItem(tab_label, *open) {
-							if current_gym_index != cast(s32) i {
-								current_gym_index = cast(s32) i;
-							}
-							ImGui.EndTabItem();
-						}
-						if !open then gltf_to_remove = cast(s32) i;
-					}
-					ImGui.EndTabBar();
-
-					if gltf_to_remove >= 0 {
-						unregister_gltf(gltf_to_remove);
-						if loaded_gltfs.count == 0 {
-							current_gym_index = min(current_gym_index, cast(s32)loaded_gltfs.count - 1);
-						}
-					}
-				}
-
-				if loaded_gltfs.count > 0 {
-					ImGui.Separator();
-					draw_asset_manager(loaded_gltfs[current_gym_index].scene, current_gym_index, pipeline, queue);
-				}
-			}
-			ImGui.End();
-
-			draw_object_library();
+			if show_gym then draw_gym(pipeline, queue);
+			if show_object_library then draw_object_library();
 
 			if selected_node != 0 {
 				aabb := get_node_bounding_box(selected_node);
@@ -94,12 +72,62 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 			}
 
 		case .WORLD;
-			terrain_imgui();
-			draw_asset_browser();
-			draw_world_objects();
+			if show_terrain then draw_terrain_window();
+			if show_debug_view then draw_debug_view_window();
+			if show_asset_browser then draw_asset_browser();
+			if show_world_objects then draw_world_objects();
 	}
 
-	draw_console();
+	if show_console then draw_console();
+}
+
+draw_gym :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue) {
+	ImGui.Begin("Gym", *show_gym);
+
+	ImGui.SameLine();
+	if ImGui.Button("Import GLTF...") {
+		path := open_file_dialog("Import GLTF", tprint("%assets/", #filepath), "*.gltf *.glb");
+		if path.count > 0 {
+			gpu_wait_idle();
+			success, scene := import_gltf(path);
+			if success {
+				gltf_idx := register_gltf(path, scene);
+				current_gym_index = gltf_idx;
+			}
+		}
+	}
+
+	if loaded_gltfs.count > 0 {
+		if ImGui.BeginTabBar("##gym_tabs") {
+			gltf_to_remove : s32 = -1;
+			for entry, i : loaded_gltfs {
+				display_name := gltf_display_name(entry.filepath);
+				tab_label := to_c_string(tprint("%##gltf_%", display_name, i));
+				open : bool = true;
+				if ImGui.BeginTabItem(tab_label, *open) {
+					if current_gym_index != cast(s32) i {
+						current_gym_index = cast(s32) i;
+					}
+					ImGui.EndTabItem();
+				}
+				if !open then gltf_to_remove = cast(s32) i;
+			}
+			ImGui.EndTabBar();
+
+			if gltf_to_remove >= 0 {
+				unregister_gltf(gltf_to_remove);
+				if loaded_gltfs.count == 0 {
+					current_gym_index = min(current_gym_index, cast(s32)loaded_gltfs.count - 1);
+				}
+			}
+		}
+
+		if loaded_gltfs.count > 0 {
+			ImGui.Separator();
+			draw_asset_manager(loaded_gltfs[current_gym_index].scene, current_gym_index, pipeline, queue);
+		}
+	}
+	ImGui.End();
 }
 
 draw_bounding_box :: (aabb : AABB, camera : Camera, screen_width : float, screen_height : float) {
@@ -143,8 +171,9 @@ draw_bounding_box :: (aabb : AABB, camera : Camera, screen_width : float, screen
 }
 
 draw_object_library :: () {
-	if ImGui.Begin("Object Library") {
-		avail := ImGui.GetContentRegionAvail().x;
+	ImGui.Begin("Object Library", *show_object_library);
+
+	avail := ImGui.GetContentRegionAvail().x;
 		thumb_size : float = 96.0;
 		padding : float = 8.0;
 		cols := cast(int)((avail + padding) / (thumb_size + padding));
@@ -182,12 +211,12 @@ draw_object_library :: () {
 				col = 0;
 			}
 		}
-	}
 	ImGui.End();
 }
 
 draw_asset_browser :: () {
-	if ImGui.Begin("Assets") {
+	ImGui.Begin("Assets", *show_asset_browser);
+	{
 		ImGui.PushItemWidth(-1);
 		ImGui.InputText("##search", asset_browser_search.data, OBJECT_NAME_MAX);
 		ImGui.PopItemWidth();
@@ -323,7 +352,8 @@ draw_scene_tree_selectable :: (node : Node, index : int, gltf_index : s32, pipel
 }
 
 draw_world_objects :: () {
-	if ImGui.Begin("World Objects") {
+	ImGui.Begin("World Objects", *show_world_objects);
+	{
 		remove_index : int = -1;
 		for *placed, i : placed_objects {
 			obj := get_object_data(placed.object);

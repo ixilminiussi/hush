@@ -18,7 +18,6 @@ history         : [HISTORY_MAX] string;
 history_count   : int;
 history_pos     : int = -1;
 
-console_open             := false;
 console_saved_context : #Context;
 
 console_print :: (fmt: string, args: .. Any) {
@@ -77,16 +76,11 @@ console_execute :: (line: string) {
 
 draw_console :: () {
 	if ImGui.IsKeyPressed(.GraveAccent, false) {
-		console_open = !console_open;
+		show_console = !show_console;
 	}
-
-	if !console_open then return;
 
 	ImGui.SetNextWindowSize(.{520, 300}, .FirstUseEver);
-	if !ImGui.Begin("Console", *console_open) {
-		ImGui.End();
-		return;
-	}
+	ImGui.Begin("Console", *show_console);
 
 	// log area
 	footer_height := ImGui.GetStyle().ItemSpacing.y + ImGui.GetFrameHeightWithSpacing();

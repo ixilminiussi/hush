@@ -273,7 +273,7 @@ main :: () {
         assert(result == .SUCCESS);
 
 		// shadow map pass
-		if view_mode == .SHADED {
+		if view_mode == .SHADED || view_mode == .CSM {
 			for i : 0..SHADOW_MAP_SPLIT_COUNT-1 {
 				gpu_begin_render_pass(cmd_buff, .{
 					depth_target = .{

@@ -99,27 +99,29 @@ terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_g
 	}
 }
 
-terrain_imgui :: () {
+draw_terrain_window :: () {
 	using terrain_settings;
 
-	if ImGui.Begin("Terrain") {
-		ImGui.SliderInt2("Resolution", *resolution, 2, 512);
-		ImGui.SliderFloat("Scale", *scale, 1.0, 500.0);
-		ImGui.SliderFloat("Height Scale", *height_scale, 0.0, 50.0);
-		ImGui.SliderFloat("Y Offset", *y_offset, -50.0, 50.0);
-		ImGui.Separator();
-		ImGui.SliderInt("LOD Levels", *lod_levels, 1, 8);
-		ImGui.SliderFloat("LOD Distance", *lod_distance, 5.0, 200.0);
-	}
+	ImGui.Begin("Terrain", *show_terrain);
+	ImGui.SliderInt2("Resolution", *resolution, 2, 512);
+	ImGui.SliderFloat("Scale", *scale, 1.0, 500.0);
+	ImGui.SliderFloat("Height Scale", *height_scale, 0.0, 50.0);
+	ImGui.SliderFloat("Y Offset", *y_offset, -50.0, 50.0);
+	ImGui.Separator();
+	ImGui.SliderInt("LOD Levels", *lod_levels, 1, 8);
+	ImGui.SliderFloat("LOD Distance", *lod_distance, 5.0, 200.0);
 	ImGui.End();
+}
 
-	if ImGui.Begin("Debug View") {
-		ImGui.RadioButton("Normal", *debug_view, 0);
-		ImGui.SameLine();
-		ImGui.RadioButton("LOD", *debug_view, 1);
-		ImGui.SameLine();
-		ImGui.RadioButton("Wireframe", *debug_view, 2);
-	}
+draw_debug_view_window :: () {
+	using terrain_settings;
+
+	ImGui.Begin("Debug View", *show_debug_view);
+	ImGui.RadioButton("Normal", *debug_view, 0);
+	ImGui.SameLine();
+	ImGui.RadioButton("LOD", *debug_view, 1);
+	ImGui.SameLine();
+	ImGui.RadioButton("Wireframe", *debug_view, 2);
 	ImGui.End();
 }
 
