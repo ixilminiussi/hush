@@ -45,17 +45,6 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 			ImGui.EndMenu();
 		}
 
-		if selected_object != 0 {
-			obj_data := get_object_data(selected_object);
-			if obj_data != null {
-				obj_name := to_string(obj_data.name.data);
-				name_width := ImGui.CalcTextSize(to_c_string(obj_name)).x;
-				bar_width := ImGui.GetWindowWidth();
-				ImGui.SetCursorPosX((bar_width - name_width) * 0.5);
-				ImGui.Text(obj_name);
-			}
-		}
-
 		// right-aligned status: GPU name | VRAM usage | FPS
 		fps := ifx smoothed_dt > 0.0001 then 1.0 / smoothed_dt else 0.0;
 

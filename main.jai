@@ -341,50 +341,59 @@ main :: () {
 		}
 
 		// prepass
+		if view_mode != .WIREFRAME {
+			gpu_begin_render_pass(cmd_buff, .{
+				depth_target  = .{
+					view = depth_view,
+					load_op = .CLEAR,
+					store_op = .STORE,
+					clear_value.depth = 0.0
+				},
+				color_targets = .[
+					.{
+						view = prepass_view,
+						load_op = .CLEAR,
+						store_op = .STORE,
+						clear_color._float = .[0, 0, 0, 1],
+					}
+				]
+			});
+
+			gpu_set_depth_stencil_state(cmd_buff, .{
+				depth_test = .GREATER,
+				depth_mode = .READ | .WRITE,
+			});
+
+			gpu_set_pipeline(cmd_buff, prepass_pipeline);
+
+			if editor_view == {
+				case .GYM;
+					if current_gym_index >= 0 {
+						active_gym := loaded_gltfs[current_gym_index].scene;
+						draw_node(cmd_buff, active_gym, *draw_arenas[frame_index], frame_gpu, Matrix4_Identity, 0);
+					}
+				case .WORLD;
+					draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, 0);
+			}
+
+			gpu_end_render_pass(cmd_buff);
+
+			gpu_barrier(cmd_buff, .COLOR_ATTACHMENT_OUTPUT, .PIXEL_SHADER);
+		}
+		// forward pass
+		depth_target := 
 		gpu_begin_render_pass(cmd_buff, .{
-			depth_target  = .{
+			depth_target  = ifx view_mode != .WIREFRAME then 
+			Gpu_Render_Pass_Attachment_Desc.{
+				view = depth_view,
+				load_op = .LOAD,
+				store_op = .STORE,
+			} else 
+			Gpu_Render_Pass_Attachment_Desc.{
 				view = depth_view,
 				load_op = .CLEAR,
 				store_op = .STORE,
 				clear_value.depth = 0.0
-			},
-			color_targets = .[
-				.{
-					view = prepass_view,
-					load_op = .CLEAR,
-					store_op = .STORE,
-					clear_color._float = .[0, 0, 0, 1],
-				}
-			]
-		});
-
-		gpu_set_depth_stencil_state(cmd_buff, .{
-			depth_test = .GREATER,
-			depth_mode = .READ | .WRITE,
-		});
-
-		gpu_set_pipeline(cmd_buff, prepass_pipeline);
-
-		if editor_view == {
-			case .GYM;
-				if current_gym_index >= 0 {
-					active_gym := loaded_gltfs[current_gym_index].scene;
-					draw_node(cmd_buff, active_gym, *draw_arenas[frame_index], frame_gpu, Matrix4_Identity, 0);
-				}
-			case .WORLD;
-				draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, 0);
-		}
-
-		gpu_end_render_pass(cmd_buff);
-
-		gpu_barrier(cmd_buff, .COLOR_ATTACHMENT_OUTPUT, .PIXEL_SHADER);
-
-		// forward pass
-		gpu_begin_render_pass(cmd_buff, .{
-			depth_target  = .{
-				view = depth_view,
-				load_op = .LOAD,
-				store_op = .STORE,
 			},
 			color_targets = .[
 				.{
