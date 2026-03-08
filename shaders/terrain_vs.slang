@@ -6,7 +6,7 @@ struct VS_Output {
     float4 position   : SV_POSITION;
     float3 color      : COLOR;
     float2 uv         : TEXCOORD0;
-    int    debug_view : DEBUG_VIEW;
+    int    lod        : LOD;
 }
 
 struct Terrain_Data {
@@ -87,65 +87,8 @@ VS_Output main(uint vertex_id: SV_VertexID) {
     output.position = mul(data->viewport_view_projection, float4(world_pos, 1.0));
     output.uv = uv;
 
-	// texel size in UV space
-	float2 texel = float2(1.0 / float(res_x * chunks_x),
-					   1.0 / float(res_y * chunks_y));                                                                                                                                         
-	float hL = terrain->heightmap.Sample(terrain->sampler, uv + float2(-texel.x, 0)).r;
-	float hR = terrain->heightmap.Sample(terrain->sampler, uv + float2( texel.x, 0)).r;
-	float hD = terrain->heightmap.Sample(terrain->sampler, uv + float2(0, -texel.y)).r;
-	float hU = terrain->heightmap.Sample(terrain->sampler, uv + float2(0,  texel.y)).r;
-
-	// world-space distances between samples
-	float dx = 2.0 * chunk_size_x / float(res_x - 1);
-	float dz = 2.0 * chunk_size_z / float(res_y - 1);
-
-	float3 N = normalize(float3(
-	    (hL - hR) * terrain->height_scale / dx,
-		1.0,
-	    (hD - hU) * terrain->height_scale / dz
-	));
-
-	// view modes: 0=shaded, 1=albedo, 2=normal, 3=csm, 4=id, 6=lod
-    int view_mode = data->view_mode;
-    output.debug_view = view_mode;
-
-	float flatness = dot(N, float3(0., 1., 0.));
-	flatness = smoothstep(terrain.threshold, 1., flatness);
-	float3 albedo = lerp(terrain.angle_color, terrain.flat_color, flatness);
-
-	if (view_mode == 0) {
-		output.color = albedo;
-	}
-
-	if (view_mode == 1) {
-		output.color = albedo;
-	}
-
-	if (view_mode == 2) {
-		output.color = N * 0.5 + 0.5;
-	}
-
-	if (view_mode == 3) {
-		output.color = albedo;
-	}
-
-	if (view_mode == 4) {
-		output.color = albedo;
-	}
-
-    if (view_mode == 6) {
-        float3 lod_colors[8] = {
-            float3(0.0, 1.0, 0.0),
-            float3(0.5, 1.0, 0.0),
-            float3(1.0, 1.0, 0.0),
-            float3(1.0, 0.5, 0.0),
-            float3(1.0, 0.0, 0.0),
-            float3(1.0, 0.0, 0.5),
-            float3(0.5, 0.0, 1.0),
-            float3(0.0, 0.0, 1.0),
-        };
-        output.color = lod_colors[clamp(lod, 0, 7)];
-    }
+	output.lod = lod;
+	output.color = float3(0.0, 0.0, 0.0);
 
     return output;
 }

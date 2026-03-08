@@ -91,7 +91,7 @@ terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_g
 			terrain_cpu, terrain_gpu := gpu_arena_alloc(draw_arena, Terrain_VS_Data);
 			terrain_cpu.* = .{frame_gpu, xx heightmap_view, xx sampler, chunk_res_x, chunk_res_y, chunks[0], chunks[1], cx, cy, lod, scale, height_scale, y_offset, threshold, flat_color, angle_color};
 
-			gpu_draw_instanced(cmd_buff, terrain_gpu, 0, xx lod_vertex_count, 1);
+			gpu_draw_instanced(cmd_buff, terrain_gpu, terrain_gpu, xx lod_vertex_count, 1);
 		}
 	}
 }
