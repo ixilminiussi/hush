@@ -131,8 +131,8 @@ screen_to_world :: (screen_x: s32, screen_y: s32, width: s32, height: s32, depth
 
 	if depth == 0.0 then return false, .{};
 
-	ndc_x := cast(float)screen_x / cast(float)width  *  2.0 - 1.0;
-	ndc_y := cast(float)screen_y / cast(float)height  *  2.0 - 1.0;
+	ndc_x :=  cast(float)screen_x / cast(float)width  * 2.0 - 1.0;
+	ndc_y := -(cast(float)screen_y / cast(float)height * 2.0 - 1.0);
 
 	clip := Vector4.{xx ndc_x, xx ndc_y, xx depth, 1.0};
 	success, inv_vp := inverse(viewport_camera.camera.projection * viewport_camera.camera.view);
@@ -142,9 +142,9 @@ screen_to_world :: (screen_x: s32, screen_y: s32, width: s32, height: s32, depth
 	return true, Vector3.{world_h.x / world_h.w, world_h.y / world_h.w, world_h.z / world_h.w};
 }
 
-terrain_raycast :: (screen_x: s32, screen_y: s32, width: s32, height: s32, viewport_camera: *Viewport_Camera, max_distance: float = 1000.0, threshold: float = 0.01) -> bool, Vector3 {
-	ndc_x := cast(float)screen_x / cast(float)width  *  2.0 - 1.0;
-	ndc_y := cast(float)screen_y / cast(float)height  *  2.0 - 1.0;
+terrain_raycast :: (screen_x: s32, screen_y: s32, width: s32, height: s32, viewport_camera: *Viewport_Camera, max_distance: float = 5000.0, threshold: float = 0.01) -> bool, Vector3 {
+	ndc_x :=  cast(float)screen_x / cast(float)width  * 2.0 - 1.0;
+	ndc_y := -(cast(float)screen_y / cast(float)height * 2.0 - 1.0);
 
 	success, inv_vp := inverse(viewport_camera.camera.projection * viewport_camera.camera.view);
 	assert(success);
@@ -160,7 +160,7 @@ terrain_raycast :: (screen_x: s32, screen_y: s32, width: s32, height: s32, viewp
 
 	is_below :: (pos: Vector3, ray_dir: Vector3, t: float) -> bool {
 		p := pos + ray_dir * t;
-		return p.y >= terrain_get_height(p.x, p.z);
+		return p.y <= terrain_get_height(p.x, p.z);
 	}
 
 	// two large steps to find a bracket where the ray crosses the terrain

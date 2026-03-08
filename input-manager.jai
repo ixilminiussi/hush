@@ -53,7 +53,7 @@ is_mouse_button_down :: (button : u8) -> bool {
 	return SDL.SDL_GetMouseState(null, null) & SDL.SDL_BUTTON(button) != 0;
 }
 
-is_mouse_button_tapped :: (button : u8, t : float64 = 0.1) -> bool {
+is_mouse_button_tapped :: (button : u8, t : float64 = 0.2) -> bool {
 	val, new := find_or_add(*mouse_button_state_map, button);
 	last_change := val.last_change;
 

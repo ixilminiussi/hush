@@ -112,7 +112,7 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 
 draw_object_preview :: (sdl_window : *SDL.SDL_Window) {
 	if selected_object != 0 {
-		if is_mouse_button_tapped(1, 1.) && !ImGui.GetIO().WantCaptureMouse {
+		if is_mouse_button_tapped(1) && !ImGui.GetIO().WantCaptureMouse {
 			width, height := get_sdl_window_size(sdl_window);
 			x, y := get_mouse_position();
 			success, position := terrain_raycast(x, y, width, height, *viewport_cameras[editor_view]);

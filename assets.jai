@@ -121,7 +121,11 @@ flatten_node_tree :: (node : Node, parent_transform : Matrix4 = Matrix4_Identity
 }
 
 register_object_from_node :: (node : Node, gltf_index : s32, pipeline : Gpu_Pipeline, queue : Gpu_Queue) {
-	meshes, matrices := flatten_node_tree(node);
+	// Use the inverse of the root node's local matrix so that the object's
+	// meshes are relative to the node itself, not its position in the scene.
+	node_data := pool_get(node_pool, node);
+	success, root_inv := inverse(node_data.matrix);
+	meshes, matrices := flatten_node_tree(node, ifx success then root_inv else Matrix4_Identity);
 	thumbnail := render_object_thumbnail(node, pipeline, queue);
 	obj : Object_Data;
 	obj.node = node;
@@ -131,7 +135,6 @@ register_object_from_node :: (node : Node, gltf_index : s32, pipeline : Gpu_Pipe
 	obj.thumbnail = thumbnail;
 	free(matrices.data);
 
-	node_data := pool_get(node_pool, node);
 	src := ifx node_data.name.count > 0 then node_data.name else "unnamed";
 	len := min(src.count, OBJECT_NAME_MAX - 1);
 	memcpy(obj.name.data, src.data, len);
@@ -665,7 +668,9 @@ load_project :: (filepath : string, pipeline : Gpu_Pipeline, queue : Gpu_Queue) 
 		node := find_node_by_gltf_index(scene, save_obj.gltf_node_index);
 		if node == 0 then continue;
 
-		meshes, matrices := flatten_node_tree(node);
+		load_node_data := pool_get(node_pool, node);
+		load_success, load_root_inv := inverse(load_node_data.matrix);
+		meshes, matrices := flatten_node_tree(node, ifx load_success then load_root_inv else Matrix4_Identity);
 		thumbnail := render_object_thumbnail(node, pipeline, queue);
 
 		obj : Object_Data;
