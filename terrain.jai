@@ -130,7 +130,7 @@ draw_terrain_window :: () {
 	ImGui.SliderFloat("Y Offset", *y_offset, -50.0, 50.0);
 	ImGui.Separator();
 	ImGui.SliderInt("LOD Levels", *lod_levels, 1, 8);
-	ImGui.SliderFloat("LOD Distance", *lod_distance, 5.0, 200.0);
+	ImGui.SliderFloat("LOD Distance", *lod_distance, 5.0, 1000.0);
 	ImGui.Separator();
 	ImGui.SliderFloat("Threshold", *threshold, 0.0, 1.0);
 	ImGui.ColorEdit3("Flat Color", *flat_color);

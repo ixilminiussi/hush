@@ -110,6 +110,34 @@ gpu_copy_from_texture :: (cmd: Gpu_Command_Buffer, dest: Gpu_Ptr, src: Gpu_Ptr, 
 
 }
 
+gpu_read_texture_pixel :: (texture_handle: Gpu_Texture, dest: *void, x: u32, y: u32, mip: u32 = 0, layer: u32 = 0) {
+    texture := get_texture(texture_handle);
+    assert(texture != null);
+
+    copy_region := VkImageToMemoryCopy.{
+        pHostPointer = dest,
+        memoryRowLength = 0,
+        memoryImageHeight = 0,
+        imageSubresource = VkImageSubresourceLayers.{
+            aspectMask = get_image_aspect_mask(texture.desc.format),
+            mipLevel = mip,
+            baseArrayLayer = layer,
+            layerCount = 1,
+        },
+        imageOffset = .{xx x, xx y, 0},
+        imageExtent = .{1, 1, 1},
+    };
+
+    copy_info := VkCopyImageToMemoryInfo.{
+        srcImage = texture.vk_image,
+        srcImageLayout = .GENERAL,
+        regionCount = 1,
+        pRegions = *copy_region,
+    };
+    vk_result := vkCopyImageToMemory(vk_device, *copy_info);
+    assert_vk_result(vk_result);
+}
+
 gpu_texture_view :: (texture_handle: Gpu_Texture, desc: Gpu_View_Desc = .{}) -> Gpu_Texture_View {
     texture := pool_get(live_textures, texture_handle);
     if !texture then return 0;

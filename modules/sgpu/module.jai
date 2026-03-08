@@ -604,26 +604,33 @@ Gpu_Info :: struct {
 }
 
 gpu_get_info :: () -> Gpu_Info {
-    info : Gpu_Info;
-    info.device_name = to_string(vk_physical_device_properties.properties.deviceName.data);
+    if !gpu_info_cached.initialized {
+        gpu_info_cached.device_name = to_string(vk_physical_device_properties.properties.deviceName.data);
+        vkGetPhysicalDeviceMemoryProperties(vk_physical_device, *gpu_info_cached.mem_props);
+
+        for i : 0..cast(int)gpu_info_cached.mem_props.memoryHeapCount-1 {
+            if gpu_info_cached.mem_props.memoryHeaps[i].flags & .DEVICE_LOCAL_BIT {
+                gpu_info_cached.vram_total += gpu_info_cached.mem_props.memoryHeaps[i].size;
+            }
+        }
+        gpu_info_cached.initialized = true;
+    }
 
     budgets : [16] VmaBudget;
     vmaGetHeapBudgets(vma, budgets.data);
 
-    mem_props : VkPhysicalDeviceMemoryProperties;
-    vkGetPhysicalDeviceMemoryProperties(vk_physical_device, *mem_props);
-
-    vram_used  : u64 = 0;
-    vram_total : u64 = 0;
-    for i : 0..cast(int)mem_props.memoryHeapCount-1 {
-        if mem_props.memoryHeaps[i].flags & .DEVICE_LOCAL_BIT {
-            vram_used  += budgets[i].statistics.allocationBytes;
-            vram_total += mem_props.memoryHeaps[i].size;
+    vram_used : u64 = 0;
+    for i : 0..cast(int)gpu_info_cached.mem_props.memoryHeapCount-1 {
+        if gpu_info_cached.mem_props.memoryHeaps[i].flags & .DEVICE_LOCAL_BIT {
+            vram_used += budgets[i].statistics.allocationBytes;
         }
     }
-    info.vram_used_mb  = vram_used / (1024 * 1024);
-    info.vram_total_mb = vram_total / (1024 * 1024);
-    return info;
+
+    return .{
+        device_name   = gpu_info_cached.device_name,
+        vram_used_mb  = vram_used / (1024 * 1024),
+        vram_total_mb = gpu_info_cached.vram_total / (1024 * 1024),
+    };
 }
 
 gpu_wait_idle :: () {
@@ -1289,6 +1296,13 @@ vk_device: VkDevice;
 vma: VmaAllocator;
 
 supports_descriptor_buffers: bool;
+
+gpu_info_cached : struct {
+    initialized : bool;
+    device_name : string;
+    vram_total  : u64;
+    mem_props   : VkPhysicalDeviceMemoryProperties;
+};
 
 Queue :: struct {
     vk_queue: VkQueue;

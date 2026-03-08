@@ -20,7 +20,7 @@ Terrain_Settings :: struct {
 	height_scale : float32 = 100.0;
 	y_offset     : float32 = 0.0;
 	lod_levels   : s32 = 4;
-	lod_distance : float32 = 200.0;
+	lod_distance : float32 = 400.0;
 	threshold    : float32 = 0.8;
 	flat_color   : [3]float32 = .[1., 1., 1.];
 	angle_color  : [3]float32 = .[.5, .5, .5];
@@ -50,7 +50,7 @@ world_init :: () {
 		it.look_dir      = .{-1., 0., 0.};
 		it.view_distance = 1000;
 		it.fov           = 30.;
-		it.move_speed    = 5.;
+		it.move_speed    = 10.;
 	}
 
 	shadow_map_camera.direction = normalize(Vector3.{-1.0, -0.5, 0.3});

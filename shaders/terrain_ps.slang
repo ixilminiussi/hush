@@ -51,7 +51,7 @@ float4 main(PS_Input input) : SV_TARGET {
 
 	// take neighboring samples at different texel sizes to average normal
 	float3 N = float3(0.0);
-	for (float t = 1.0; t <= 3; t += 0.3) {
+	for (float t = 1.0; t <= 2.5; t += 0.5) {
 		float2 texel = float2(t / float(total_res_x),
 							   t / float(total_res_y));
 		float hL = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(-texel.x, 0)).r;
@@ -67,7 +67,7 @@ float4 main(PS_Input input) : SV_TARGET {
 			(hL - hR) * terrain->height_scale / dx,
 			1.0,
 			(hD - hU) * terrain->height_scale / dz
-		));
+		)) * t;
 	}
 	N = normalize(N);
 

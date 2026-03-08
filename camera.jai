@@ -109,8 +109,6 @@ build_view_projections :: (using shadow_map_camera : *Shadow_Map_Camera($N), cen
 	}
 }
 
-// Reversed-Z infinite far plane projection for Vulkan (depth range [0, 1]).
-// Near maps to depth 1, infinity maps to depth 0, giving superior float precision at distance.
 make_reverse_z_infinite_projection :: (fov_vertical : float, aspect_ratio : float, z_near : float) -> Matrix4 {
 	result : Matrix4;
 	memset(*result, 0, size_of(Matrix4));
@@ -120,11 +118,69 @@ make_reverse_z_infinite_projection :: (fov_vertical : float, aspect_ratio : floa
 
 	result._11 = cot_theta / aspect_ratio;
 	result._22 = cot_theta;
-	result._33 = 0.0;         // lim(n/f) as f->inf
-	result._43 = -1.0;        // perspective divide
-	result._34 = z_near;      // maps near plane to depth 1
+	result._33 = 0.0;        
+	result._43 = -1.0;        
+	result._34 = z_near;    
 	result._44 = 0.0;
 	return result;
+}
+
+screen_to_world :: (screen_x: s32, screen_y: s32, width: s32, height: s32, depth_texture: Gpu_Texture, viewport_camera: *Viewport_Camera) -> bool, Vector3 {
+	depth: float32;
+	gpu_read_texture_pixel(depth_texture, *depth, xx screen_x, xx screen_y);
+
+	if depth == 0.0 then return false, .{};
+
+	ndc_x := cast(float)screen_x / cast(float)width  *  2.0 - 1.0;
+	ndc_y := cast(float)screen_y / cast(float)height  *  2.0 - 1.0;
+
+	clip := Vector4.{xx ndc_x, xx ndc_y, xx depth, 1.0};
+	success, inv_vp := inverse(viewport_camera.camera.projection * viewport_camera.camera.view);
+	assert(success);
+	world_h := simd_multiply(inv_vp, clip);
+
+	return true, Vector3.{world_h.x / world_h.w, world_h.y / world_h.w, world_h.z / world_h.w};
+}
+
+terrain_raycast :: (screen_x: s32, screen_y: s32, width: s32, height: s32, viewport_camera: *Viewport_Camera, max_distance: float = 1000.0, step_size: float = 0.5) -> bool, Vector3 {
+	ndc_x := cast(float)screen_x / cast(float)width  *  2.0 - 1.0;
+	ndc_y := cast(float)screen_y / cast(float)height  *  2.0 - 1.0;
+
+	success, inv_vp := inverse(viewport_camera.camera.projection * viewport_camera.camera.view);
+	assert(success);
+	near_h := inv_vp * Vector4.{xx ndc_x, xx ndc_y, 1.0, 1.0};
+	far_h  := inv_vp * Vector4.{xx ndc_x, xx ndc_y, 0.0, 1.0};
+	near_pt := Vector3.{near_h.x / near_h.w, near_h.y / near_h.w, near_h.z / near_h.w};
+	far_pt  := Vector3.{far_h.x / far_h.w, far_h.y / far_h.w, far_h.z / far_h.w};
+
+	ray_dir := normalize(far_pt - near_pt);
+	pos := viewport_camera.position;
+
+	// TODO: reexamine this function, probably not the fastest idea
+	t : float = 0.0;
+	while t < max_distance {
+		p := pos + ray_dir * t;
+		terrain_y := terrain_get_height(p.x, p.z);
+
+		if p.y <= terrain_y {
+			lo := t - step_size;
+			hi := t;
+			for 0..15 {
+				mid := (lo + hi) * 0.5;
+				mp := pos + ray_dir * mid;
+				if mp.y <= terrain_get_height(mp.x, mp.z) {
+					hi = mid;
+				} else {
+					lo = mid;
+				}
+			}
+			result := pos + ray_dir * ((lo + hi) * 0.5);
+			return true, result;
+		}
+		t += step_size;
+	}
+
+	return false, .{};
 }
 
 #scope_file
