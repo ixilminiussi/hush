@@ -597,6 +597,35 @@ gpu_collect_garbage :: () {
     collect_garbage_resources();
 }
 
+Gpu_Info :: struct {
+    device_name   : string;
+    vram_used_mb  : u64;
+    vram_total_mb : u64;
+}
+
+gpu_get_info :: () -> Gpu_Info {
+    info : Gpu_Info;
+    info.device_name = to_string(vk_physical_device_properties.properties.deviceName.data);
+
+    budgets : [16] VmaBudget;
+    vmaGetHeapBudgets(vma, budgets.data);
+
+    mem_props : VkPhysicalDeviceMemoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(vk_physical_device, *mem_props);
+
+    vram_used  : u64 = 0;
+    vram_total : u64 = 0;
+    for i : 0..cast(int)mem_props.memoryHeapCount-1 {
+        if mem_props.memoryHeaps[i].flags & .DEVICE_LOCAL_BIT {
+            vram_used  += budgets[i].statistics.allocationBytes;
+            vram_total += mem_props.memoryHeaps[i].size;
+        }
+    }
+    info.vram_used_mb  = vram_used / (1024 * 1024);
+    info.vram_total_mb = vram_total / (1024 * 1024);
+    return info;
+}
+
 gpu_wait_idle :: () {
     vkDeviceWaitIdle(vk_device);
 }

@@ -10,6 +10,7 @@ Viewport_Camera :: struct {
 	look_dir      : Vector3;
 	fov           : float;
 	view_distance : float;
+	move_speed    : float;
 }
 
 update_view :: (using viewport_camera : *Viewport_Camera) {
@@ -17,7 +18,7 @@ update_view :: (using viewport_camera : *Viewport_Camera) {
 }
 
 update_projection :: (using viewport_camera : *Viewport_Camera, aspect_ratio : float) {
-	projection = make_projection_matrix(fov, aspect_ratio, view_distance * NEAR_FAR_RATIO, view_distance);
+	projection = make_reverse_z_infinite_projection(fov, aspect_ratio, view_distance * NEAR_FAR_RATIO);
 }
 
 // orbit_viewport_camera :: (using viewport_camera : *Viewport_Camera, direction : Vector2, up : Vector3) {
@@ -108,7 +109,25 @@ build_view_projections :: (using shadow_map_camera : *Shadow_Map_Camera($N), cen
 	}
 }
 
-#scope_file 
+// Reversed-Z infinite far plane projection for Vulkan (depth range [0, 1]).
+// Near maps to depth 1, infinity maps to depth 0, giving superior float precision at distance.
+make_reverse_z_infinite_projection :: (fov_vertical : float, aspect_ratio : float, z_near : float) -> Matrix4 {
+	result : Matrix4;
+	memset(*result, 0, size_of(Matrix4));
+
+	tan_theta := tan(fov_vertical * 0.5);
+	cot_theta := 1.0 / tan_theta;
+
+	result._11 = cot_theta / aspect_ratio;
+	result._22 = cot_theta;
+	result._33 = 0.0;         // lim(n/f) as f->inf
+	result._43 = -1.0;        // perspective divide
+	result._34 = z_near;      // maps near plane to depth 1
+	result._44 = 0.0;
+	return result;
+}
+
+#scope_file
 
 NEAR_FAR_RATIO :: 1.0 / 2000.0;
 VIEWPORT_SENSITIVITY :: 1;

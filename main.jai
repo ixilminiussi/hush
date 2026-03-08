@@ -46,7 +46,7 @@ main :: () {
 	}
 
 	_, depth_texture := gpu_create_texture(.{
-		format     = .D16_UNORM,
+		format     = .D32_SFLOAT,
 		usage      = .DEPTH_STENCIL_ATTACHMENT | .SAMPLED,
 		dimensions = .[xx width, xx height, 1]
 	});
@@ -149,6 +149,7 @@ main :: () {
 
 	for *viewport_cameras {
 		update_projection(it, cast(float32)width / cast(float32)height);
+		update_view(it);
 	}
 	build_cascade_splits(*shadow_map_camera, viewport_cameras[xx editor_view].view_distance, 0.9); // same view distance for all for now. be careful if that changes
 
@@ -176,7 +177,7 @@ main :: () {
 			resize_imgui_window(width, height);
 
 			_, depth_texture = gpu_create_texture(.{
-				format     = .D16_UNORM,
+				format     = .D32_SFLOAT,
 				usage      = .DEPTH_STENCIL_ATTACHMENT,
 				dimensions = .[cast(u32)width, cast(u32)height, 1]
 			});
@@ -209,51 +210,63 @@ main :: () {
 		} else {
 			capture_mouse(false);
 		}
-		moved, dir := mouse_moved_relative();
-		if moved && mouse_capture {
-			rotate_viewport_camera(viewport_camera, .{dir.x, -dir.y} * cast(float32)dt, .{0., 1., 0.});
-		}
+		if mouse_capture {
+			moved : bool;
 
-		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_SPACE) {
-			using viewport_camera;
-			position += UP * dt * MOVE_SPEED;
-			moved = true;
-		}
+			looked, dir := mouse_moved_relative();
+			if looked {
+				rotate_viewport_camera(viewport_camera, .{dir.x, -dir.y} * cast(float32)dt, .{0., 1., 0.});
+				moved = true;
+			}
 
-		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_LSHIFT) {
-			using viewport_camera;
-			position += -UP * dt * MOVE_SPEED;
-			moved = true;
-		}
+			scrolled, dir= := mouse_scrolled();
+			if scrolled {
+				rotate_viewport_camera(viewport_camera, .{dir.x, -dir.y} * cast(float32)dt, .{0., 1., 0.});
+				viewport_camera.move_speed = max(0.1, viewport_camera.move_speed * 1.0 + 0.5 * dir.y);
+				moved = true;
+			}
 
-		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_W) {
-			using viewport_camera;
-			position += look_dir * dt * MOVE_SPEED;
-			moved = true;
-		}
+			if is_key_down(SDL.SDL_SCANCODE_SPACE) {
+				using viewport_camera;
+				position += UP * dt * viewport_camera.move_speed;
+				moved = true;
+			}
 
-		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_S) {
-			using viewport_camera;
-			position += -look_dir * dt * MOVE_SPEED;
-			moved = true;
-		}
+			if is_key_down(SDL.SDL_SCANCODE_LSHIFT) {
+				using viewport_camera;
+				position += -UP * dt * viewport_camera.move_speed;
+				moved = true;
+			}
 
-		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_D) {
-			using viewport_camera;
-			right := -cross_product(UP, look_dir);
-			position += right * dt * MOVE_SPEED;
-			moved = true;
-		}
+			if is_key_down(SDL.SDL_SCANCODE_W) {
+				using viewport_camera;
+				position += look_dir * dt * viewport_camera.move_speed;
+				moved = true;
+			}
 
-		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_A) {
-			using viewport_camera;
-			left := cross_product(UP, look_dir);
-			position += left * dt * MOVE_SPEED;
-			moved = true;
-		}
+			if is_key_down(SDL.SDL_SCANCODE_S) {
+				using viewport_camera;
+				position += -look_dir * dt * viewport_camera.move_speed;
+				moved = true;
+			}
 
-		if moved {
-			update_view(viewport_camera);
+			if is_key_down(SDL.SDL_SCANCODE_D) {
+				using viewport_camera;
+				right := -cross_product(UP, look_dir);
+				position += right * dt * viewport_camera.move_speed;
+				moved = true;
+			}
+
+			if is_key_down(SDL.SDL_SCANCODE_A) {
+				using viewport_camera;
+				left := cross_product(UP, look_dir);
+				position += left * dt * viewport_camera.move_speed;
+				moved = true;
+			}
+
+			if moved {
+				update_view(viewport_camera);
+			}
 		}
 
 		// rendering
@@ -333,7 +346,7 @@ main :: () {
 				view = depth_view,
 				load_op = .CLEAR,
 				store_op = .STORE,
-				clear_value.depth = 1.0
+				clear_value.depth = 0.0
 			},
 			color_targets = .[
 				.{
@@ -346,7 +359,7 @@ main :: () {
 		});
 
 		gpu_set_depth_stencil_state(cmd_buff, .{
-			depth_test = .LESS,
+			depth_test = .GREATER,
 			depth_mode = .READ | .WRITE,
 		});
 
@@ -390,10 +403,10 @@ main :: () {
 		});
 
 		gpu_set_depth_stencil_state(cmd_buff, .{
-			depth_test = .LESS_OR_EQUAL,
+			depth_test = .GREATER_OR_EQUAL,
 			depth_mode = .READ | .WRITE,
 			depth_bias = 0.0,
-			depth_bias_slope_factor = -4.0,
+			depth_bias_slope_factor = 4.0,
 			depth_bias_clamp = 0.01,
 		});
 
@@ -418,7 +431,7 @@ main :: () {
 
 		ImGui.NewFrame();
 
-		editor_draw(forward_pipeline, main_queue, width, height);
+		editor_draw(forward_pipeline, main_queue, width, height, xx dt);
 
 		ImGui.EndFrame();
 
@@ -456,7 +469,6 @@ save :: (args: [] string) {
 sdl_window : *SDL.SDL_Window;
 window : u64;
 
-MOVE_SPEED :: 5;
 UP :: Vector3.{0., 1., 0.};
 
 #load "world.jai";
@@ -476,4 +488,5 @@ UP :: Vector3.{0., 1., 0.};
 MAX_FRAMES_IN_FLIGHT :: 3;
 
 SDL :: #import "SDL";
-#import "sgpu"(VALIDATION=true, RENDER_CAPTURE=true, MAX_FRAMES_IN_FLIGHT=MAX_FRAMES_IN_FLIGHT);
+// #import "sgpu"(VALIDATION=true, RENDER_CAPTURE=true, MAX_FRAMES_IN_FLIGHT=MAX_FRAMES_IN_FLIGHT);
+#import "sgpu"(VALIDATION=true, MAX_FRAMES_IN_FLIGHT=MAX_FRAMES_IN_FLIGHT);

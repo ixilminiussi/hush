@@ -14,7 +14,7 @@ current_view_label : string;
 terrain_settings : Terrain_Settings;
 
 Terrain_Settings :: struct {
-	resolution   : [2]s32 = .[256, 256];
+	resolution   : [2]s32 = .[512, 512];
 	chunks       : [2]s32 = .[8, 8];
 	scale        : float32 = 400.0;
 	height_scale : float32 = 100.0;
@@ -48,8 +48,9 @@ world_init :: () {
 	for *viewport_cameras {
 		it.position      = .{5., 0., 0.};
 		it.look_dir      = .{-1., 0., 0.};
-		it.view_distance = 200;
+		it.view_distance = 1000;
 		it.fov           = 30.;
+		it.move_speed    = 5.;
 	}
 
 	shadow_map_camera.direction = normalize(Vector3.{-1.0, -0.5, 0.3});

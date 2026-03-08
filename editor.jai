@@ -14,7 +14,12 @@ show_asset_browser  := true;
 show_world_objects  := true;
 show_console        := false;
 
-editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height : s32) {
+editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height : s32, dt : float32 = 0.016) {
+	// smooth FPS with exponential moving average
+	FPS_SMOOTHING :: 0.05;
+	if smoothed_dt == 0 then smoothed_dt = dt;
+	else smoothed_dt = smoothed_dt * (1.0 - FPS_SMOOTHING) + dt * FPS_SMOOTHING;
+
 	if ImGui.BeginMainMenuBar() {
 		if ImGui.BeginMenu("File") {
 			if ImGui.MenuItem("Save") {
@@ -40,8 +45,24 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 			ImGui.EndMenu();
 		}
 
+		// right-aligned status: GPU name | VRAM usage | FPS
+		fps := ifx smoothed_dt > 0.0001 then 1.0 / smoothed_dt else 0.0;
+
+		gpu_info := gpu_get_info();
+		status_text := tprint("% | %/% MB | % FPS",
+			gpu_info.device_name,
+			gpu_info.vram_used_mb,
+			gpu_info.vram_total_mb,
+			cast(int)fps);
+
 		avail := ImGui.GetContentRegionAvail().x;
-		ImGui.SetCursorPosX(avail - 80);
+		status_width := ImGui.CalcTextSize(to_c_string(status_text)).x;
+		view_label_width : float = 100.0;
+
+		ImGui.SetCursorPosX(avail - status_width - view_label_width - 20);
+		ImGui.TextDisabled(status_text);
+
+		ImGui.SetCursorPosX(avail - view_label_width);
 		if ImGui.BeginMenu(to_c_string(current_view_label)) {
 			for i : 0..VIEW_MODE_NAMES.count-1 {
 				if ImGui.MenuItem(to_c_string(VIEW_MODE_NAMES[i]), selected = view_mode == xx i) {
@@ -381,3 +402,5 @@ selected_node : Node;
 
 asset_browser_search     : [OBJECT_NAME_MAX] u8;
 asset_browser_gym_filter : s32 = -1;
+
+smoothed_dt : float32 = 0;
