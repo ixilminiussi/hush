@@ -411,6 +411,9 @@ import_gltf :: (filepath : string) -> bool, Node {
 	defer free(mesh_lookup.data);
 	defer free(mesh_aabb_lookup.data);
 
+	total_vertex_count : u32;
+	total_index_count  : u32;
+
 	for 0..data.meshes_count-1 {
 		using mesh : Mesh_Data;
 
@@ -459,8 +462,8 @@ import_gltf :: (filepath : string) -> bool, Node {
 
 			if primitive_cgltf.indices != null then index_count = cast(u32)primitive_cgltf.indices.count;
 
-			log("vertex requirements: %\n", vertex_count * size_of(Vertex));
-			log("index requirements: %\n",  index_count *  size_of(s64));
+			total_vertex_count += vertex_count;
+			total_index_count  += index_count;
 
 			vertices, vertex_gpu= := gpu_arena_array_alloc(*gpu_arena, Vertex, xx vertex_count);
 			indices,  index_gpu=  := gpu_arena_array_alloc(*gpu_arena, u32,    xx index_count);
@@ -555,6 +558,9 @@ import_gltf :: (filepath : string) -> bool, Node {
 			scene_data.children[it] = node_lookup[child_index];
 		}
 	}
+
+	log("vertex requirements: %\n", total_vertex_count * size_of(Vertex));
+	log("index requirements: %\n",  total_index_count *  size_of(s64));
 
 	scene := pool_add(*node_pool, scene_data);
 	compute_node_aabb(scene, mesh_aabb_lookup);

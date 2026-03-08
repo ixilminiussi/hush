@@ -2,23 +2,102 @@ is_key_down :: (key_code : SDL.SDL_Scancode) -> bool {
 	return SDL.SDL_GetKeyboardState(null)[key_code] != 0;
 }
 
-is_key_tapped :: (key_code : SDL.SDL_Scancode) -> bool {
+is_key_tapped :: (key_code : SDL.SDL_Scancode, t : float64 = 0.1) -> bool {
 	val, new := find_or_add(*key_state_map, key_code);
-	if new {
-		val.* = is_key_down(key_code);
-		return val.*;
-	} else {
-		old_value := val.*;
-		val.* = is_key_down(key_code);
-		if old_value != val.* && val.* == true {
+	last_change := val.last_change;
+
+	if is_key_released(key_code) {
+		interval := seconds_since_init() - last_change;
+
+		if interval <= t {
 			return true;
 		}
-		return false;
 	}
+
+	return false;
+}
+
+is_key_pressed :: (key_code : SDL.SDL_Scancode) -> bool {
+	val, new := find_or_add(*key_state_map, key_code);
+	new_value := is_key_down(key_code);
+
+	if new {
+		val.* = .{new_value, seconds_since_init()};
+		return val.state;
+	} 
+
+	if val.state != new_value {
+		val.* = .{new_value, seconds_since_init()};
+		return val.state;
+	}
+	return false;
+}
+
+is_key_released :: (key_code : SDL.SDL_Scancode) -> bool {
+	val, new := find_or_add(*key_state_map, key_code);
+	new_value := is_key_down(key_code);
+
+	if new {
+		val.* = .{new_value, seconds_since_init()};
+		return !val.state;
+	} 
+
+	if val.state != new_value {
+		val.* = .{new_value, seconds_since_init()};
+		return !val.state;
+	}
+	return false;
 }
 
 is_mouse_button_down :: (button : u8) -> bool {
 	return SDL.SDL_GetMouseState(null, null) & SDL.SDL_BUTTON(button) != 0;
+}
+
+is_mouse_button_tapped :: (button : u8, t : float64 = 0.1) -> bool {
+	val, new := find_or_add(*mouse_button_state_map, button);
+	last_change := val.last_change;
+
+	if is_mouse_button_released(button) {
+		interval := seconds_since_init() - last_change;
+
+		if interval <= t {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+is_mouse_button_pressed :: (button : u8) -> bool {
+	val, new := find_or_add(*mouse_button_state_map, button);
+	new_value := is_mouse_button_down(button);
+
+	if new {
+		val.* = .{new_value, seconds_since_init()};
+		return val.state;
+	} 
+
+	if val.state != new_value {
+		val.* = .{new_value, seconds_since_init()};
+		return val.state;
+	}
+	return false;
+}
+
+is_mouse_button_released :: (button : u8) -> bool {
+	val, new := find_or_add(*mouse_button_state_map, button);
+	new_value := is_mouse_button_down(button);
+
+	if new {
+		val.* = .{new_value, seconds_since_init()};
+		return !val.state;
+	} 
+
+	if val.state != new_value {
+		val.* = .{new_value, seconds_since_init()};
+		return !val.state;
+	}
+	return false;
 }
 
 mouse_moved_relative :: () -> bool, Vector2 {
@@ -96,7 +175,12 @@ get_mouse_position :: () -> s32, s32 {
 
 #scope_file
 
-key_state_map : Table(SDL.SDL_Scancode, bool);
+State_Pair :: struct {
+	state : bool;
+	last_change : float64;
+}
+key_state_map          : Table(SDL.SDL_Scancode, State_Pair);
+mouse_button_state_map : Table(u8, State_Pair);
 
 SDL :: #import "SDL";
 

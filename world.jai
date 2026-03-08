@@ -38,6 +38,11 @@ place_object :: (object : Object, transform : Matrix4 = Matrix4_Identity) {
 	array_add(*placed_objects, .{object, transform});
 }
 
+place_object :: (object : Object, position : Vector3) {
+	transform := make_translation_matrix4(position);
+	array_add(*placed_objects, .{object, transform});
+}
+
 remove_placed_object :: (index : int) {
 	if index >= 0 && index < placed_objects.count {
 		array_ordered_remove_by_index(*placed_objects, index);

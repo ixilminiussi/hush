@@ -421,6 +421,7 @@ main :: () {
 			case .WORLD;
 				draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, 0);
 				terrain_draw(cmd_buff, *draw_arenas[frame_index], frame_gpu, viewport_camera.position, default_sampler, view_mode == .WIREFRAME);
+				draw_object_preview(sdl_window);
 		}
 
 		gpu_end_render_pass(cmd_buff);

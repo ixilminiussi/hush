@@ -45,6 +45,17 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 			ImGui.EndMenu();
 		}
 
+		if selected_object != 0 {
+			obj_data := get_object_data(selected_object);
+			if obj_data != null {
+				obj_name := to_string(obj_data.name.data);
+				name_width := ImGui.CalcTextSize(to_c_string(obj_name)).x;
+				bar_width := ImGui.GetWindowWidth();
+				ImGui.SetCursorPosX((bar_width - name_width) * 0.5);
+				ImGui.Text(obj_name);
+			}
+		}
+
 		// right-aligned status: GPU name | VRAM usage | FPS
 		fps := ifx smoothed_dt > 0.0001 then 1.0 / smoothed_dt else 0.0;
 
@@ -97,6 +108,19 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 	}
 
 	if show_console then draw_console();
+}
+
+draw_object_preview :: (sdl_window : *SDL.SDL_Window) {
+	if selected_object != 0 {
+		if is_mouse_button_tapped(1, 1.) && !ImGui.GetIO().WantCaptureMouse {
+			width, height := get_sdl_window_size(sdl_window);
+			x, y := get_mouse_position();
+			success, position := terrain_raycast(x, y, width, height, *viewport_cameras[editor_view]);
+			if success {
+				place_object(selected_object, position);
+			}
+		}
+	}
 }
 
 draw_gym :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue) {
@@ -273,8 +297,11 @@ draw_asset_browser :: () {
 
 			ImGui.BeginGroup();
 
+			object_id := cast(Object)(it_index + 1);
 			if it.thumbnail != 0 {
-				ImGui.Image(cast(ImGui.ImTextureID) it.thumbnail, .{thumb_size, thumb_size});
+				if ImGui.ImageButton(to_c_string(tprint("Place##browse_%", it_index)), cast(ImGui.ImTextureID) it.thumbnail, .{thumb_size, thumb_size}, .{0, 0}, .{1, 1}, .{0, 0, 0, 0}, .{1, 1, 1, 1}) {
+					selected_object = object_id;
+				}
 			} else {
 				ImGui.Dummy(.{thumb_size, thumb_size});
 			}
@@ -283,11 +310,6 @@ draw_asset_browser :: () {
 			ImGui.PushTextWrapPos(cursor_x + thumb_size);
 			ImGui.TextWrapped(name_str);
 			ImGui.PopTextWrapPos();
-
-			object_id := cast(Object)(it_index + 1);
-			if ImGui.SmallButton(to_c_string(tprint("Place##browse_%", it_index))) {
-				place_object(object_id);
-			}
 
 			ImGui.EndGroup();
 
@@ -398,7 +420,8 @@ draw_world_objects :: () {
 
 #scope_file
 
-selected_node : Node;
+selected_object : Object;
+selected_node   : Node;
 
 asset_browser_search     : [OBJECT_NAME_MAX] u8;
 asset_browser_gym_filter : s32 = -1;

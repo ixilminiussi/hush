@@ -24,38 +24,46 @@ terrain_free :: () {
 
 // returns the terrain height at a given world-space (x, z) position
 terrain_get_height :: (wx : float, wz : float) -> float {
+	if heightmap_pixels == null || heightmap_width <= 0 || heightmap_height <= 0 then return 0;
+
 	using terrain_settings;
 
 	// world position to UV (same mapping as the vertex shader)
 	u := wx / scale + 0.5;
 	v := wz / scale + 0.5;
 
-	// clamp to [0, 1]
-	if u < 0 then u = 0;
-	if u > 1 then u = 1;
-	if v < 0 then v = 0;
-	if v > 1 then v = 1;
+	// clamp to [0, 1] (use max/min to handle NaN safely)
+	u = max(0.0, min(1.0, u));
+	v = max(0.0, min(1.0, v));
+	if u != u then u = 0;
+	if v != v then v = 0;
 
 	// pixel coordinates (bilinear sampling)
 	px := u * cast(float)(heightmap_width  - 1);
 	py := v * cast(float)(heightmap_height - 1);
 
-	x0 := cast(s32) px;
-	y0 := cast(s32) py;
+	x0 := clamp(cast(s32) px, 0, heightmap_width  - 1);
+	y0 := clamp(cast(s32) py, 0, heightmap_height - 1);
 	x1 := min(x0 + 1, heightmap_width  - 1);
 	y1 := min(y0 + 1, heightmap_height - 1);
 
 	fx := px - cast(float) x0;
 	fy := py - cast(float) y0;
 
-	sample :: (pixels : *u8, w : s32, x : s32, y : s32) -> float {
-		return cast(float) pixels[y * w + x] / 255.0;
+	srgb_to_linear :: (s : float) -> float {
+		if s <= 0.04045 then return s / 12.92;
+		return pow((s + 0.055) / 1.055, 2.4);
 	}
 
-	h00 := sample(heightmap_pixels, heightmap_width, x0, y0);
-	h10 := sample(heightmap_pixels, heightmap_width, x1, y0);
-	h01 := sample(heightmap_pixels, heightmap_width, x0, y1);
-	h11 := sample(heightmap_pixels, heightmap_width, x1, y1);
+	sample :: (pixels : *u8, w : s32, h : s32, x : s32, y : s32) -> float {
+		if x < 0 || x >= w || y < 0 || y >= h then return 0;
+		return srgb_to_linear(cast(float) pixels[y * w + x] / 255.0);
+	}
+
+	h00 := sample(heightmap_pixels, heightmap_width, heightmap_height, x0, y0);
+	h10 := sample(heightmap_pixels, heightmap_width, heightmap_height, x1, y0);
+	h01 := sample(heightmap_pixels, heightmap_width, heightmap_height, x0, y1);
+	h11 := sample(heightmap_pixels, heightmap_width, heightmap_height, x1, y1);
 
 	h := h00 * (1 - fx) * (1 - fy) + h10 * fx * (1 - fy) + h01 * (1 - fx) * fy + h11 * fx * fy;
 

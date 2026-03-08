@@ -142,45 +142,54 @@ screen_to_world :: (screen_x: s32, screen_y: s32, width: s32, height: s32, depth
 	return true, Vector3.{world_h.x / world_h.w, world_h.y / world_h.w, world_h.z / world_h.w};
 }
 
-terrain_raycast :: (screen_x: s32, screen_y: s32, width: s32, height: s32, viewport_camera: *Viewport_Camera, max_distance: float = 1000.0, step_size: float = 0.5) -> bool, Vector3 {
+terrain_raycast :: (screen_x: s32, screen_y: s32, width: s32, height: s32, viewport_camera: *Viewport_Camera, max_distance: float = 1000.0, threshold: float = 0.01) -> bool, Vector3 {
 	ndc_x := cast(float)screen_x / cast(float)width  *  2.0 - 1.0;
 	ndc_y := cast(float)screen_y / cast(float)height  *  2.0 - 1.0;
 
 	success, inv_vp := inverse(viewport_camera.camera.projection * viewport_camera.camera.view);
 	assert(success);
-	near_h := inv_vp * Vector4.{xx ndc_x, xx ndc_y, 1.0, 1.0};
-	far_h  := inv_vp * Vector4.{xx ndc_x, xx ndc_y, 0.0, 1.0};
+	near_clip := Vector4.{xx ndc_x, xx ndc_y, 1.0, 1.0};
+	far_clip  := Vector4.{xx ndc_x, xx ndc_y, 0.5, 1.0};
+	near_h := simd_multiply(inv_vp, near_clip);
+	far_h  := simd_multiply(inv_vp, far_clip);
 	near_pt := Vector3.{near_h.x / near_h.w, near_h.y / near_h.w, near_h.z / near_h.w};
 	far_pt  := Vector3.{far_h.x / far_h.w, far_h.y / far_h.w, far_h.z / far_h.w};
 
 	ray_dir := normalize(far_pt - near_pt);
 	pos := viewport_camera.position;
 
-	// TODO: reexamine this function, probably not the fastest idea
-	t : float = 0.0;
-	while t < max_distance {
+	is_below :: (pos: Vector3, ray_dir: Vector3, t: float) -> bool {
 		p := pos + ray_dir * t;
-		terrain_y := terrain_get_height(p.x, p.z);
-
-		if p.y <= terrain_y {
-			lo := t - step_size;
-			hi := t;
-			for 0..15 {
-				mid := (lo + hi) * 0.5;
-				mp := pos + ray_dir * mid;
-				if mp.y <= terrain_get_height(mp.x, mp.z) {
-					hi = mid;
-				} else {
-					lo = mid;
-				}
-			}
-			result := pos + ray_dir * ((lo + hi) * 0.5);
-			return true, result;
-		}
-		t += step_size;
+		return p.y >= terrain_get_height(p.x, p.z);
 	}
 
-	return false, .{};
+	// two large steps to find a bracket where the ray crosses the terrain
+	half := max_distance * 0.5;
+	lo : float = 0.0;
+	hi : float = 0.0;
+
+	if is_below(pos, ray_dir, half) {
+		lo = 0.0;
+		hi = half;
+	} else if is_below(pos, ray_dir, max_distance) {
+		lo = half;
+		hi = max_distance;
+	} else {
+		return false, .{};
+	}
+
+	// binary search until within threshold
+	while (hi - lo) > threshold {
+		mid := (lo + hi) * 0.5;
+		if is_below(pos, ray_dir, mid) {
+			hi = mid;
+		} else {
+			lo = mid;
+		}
+	}
+
+	result := pos + ray_dir * ((lo + hi) * 0.5);
+	return true, result;
 }
 
 #scope_file
