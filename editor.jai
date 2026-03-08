@@ -10,7 +10,6 @@ editor_view := Editor_View.WORLD;
 show_gym            := true;
 show_object_library := true;
 show_terrain        := true;
-show_debug_view     := true;
 show_asset_browser  := true;
 show_world_objects  := true;
 show_console        := false;
@@ -33,7 +32,6 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 				ImGui.MenuItem("Object Library", null, *show_object_library);
 			} else if editor_view == .WORLD {
 				ImGui.MenuItem("Terrain", null, *show_terrain);
-				ImGui.MenuItem("Debug View", null, *show_debug_view);
 				ImGui.MenuItem("Assets", null, *show_asset_browser);
 				ImGui.MenuItem("World Objects", null, *show_world_objects);
 			}
@@ -73,7 +71,6 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 
 		case .WORLD;
 			if show_terrain then draw_terrain_window();
-			if show_debug_view then draw_debug_view_window();
 			if show_asset_browser then draw_asset_browser();
 			if show_world_objects then draw_world_objects();
 	}

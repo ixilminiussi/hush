@@ -86,12 +86,14 @@ main :: () {
     shadow_map_pipeline := gpu_create_graphics_pipeline(shadow_map_vertex_spv, shadow_map_pixel_spv, raster_desc);
     defer gpu_free_pipeline(shadow_map_pipeline);
 
-	terrain_init(raster_desc);
+	wireframe_raster_desc := raster_desc;
+	wireframe_raster_desc.fill = .LINE;
+	terrain_init(raster_desc, wireframe_raster_desc);
 	defer terrain_free();
 
-	success=, prepass_vertex_spv := compile_shader("shaders/prepass_vs.slang", "", true);
+	success=, prepass_vertex_spv := compile_shader("shaders/pp_mesh_vs.slang", "", true);
     assert(success);
-    success=, prepass_pixel_spv := compile_shader("shaders/prepass_ps.slang", "", true);
+    success=, prepass_pixel_spv := compile_shader("shaders/pp_mesh_ps.slang", "", true);
     assert(success);
 
     prepass_pipeline := gpu_create_graphics_pipeline(prepass_vertex_spv, prepass_pixel_spv, raster_desc);
@@ -106,13 +108,18 @@ main :: () {
         blend_state = *blend_state,
     };
 
-	success=, forward_vertex_spv := compile_shader("shaders/forward_vs.slang", "", true);
+	success=, forward_vertex_spv := compile_shader("shaders/mesh_vs.slang", "", true);
     assert(success);
-    success=, forward_pixel_spv := compile_shader("shaders/forward_ps.slang", "", true);
+    success=, forward_pixel_spv := compile_shader("shaders/mesh_ps.slang", "", true);
     assert(success);
 
     forward_pipeline := gpu_create_graphics_pipeline(forward_vertex_spv, forward_pixel_spv, forward_raster_desc);
     defer gpu_free_pipeline(forward_pipeline);
+
+	forward_wireframe_desc := forward_raster_desc;
+	forward_wireframe_desc.fill = .LINE;
+	forward_wireframe_pipeline := gpu_create_graphics_pipeline(forward_vertex_spv, forward_pixel_spv, forward_wireframe_desc);
+	defer gpu_free_pipeline(forward_wireframe_pipeline);
 
 	// arenas
 	frame_arenas    : [MAX_FRAMES_IN_FLIGHT]Gpu_Arena;
@@ -378,7 +385,7 @@ main :: () {
 			depth_bias_clamp = 0.01,
 		});
 
-		gpu_set_pipeline(cmd_buff, forward_pipeline);
+		gpu_set_pipeline(cmd_buff, ifx view_mode == .WIREFRAME then forward_wireframe_pipeline else forward_pipeline);
 
 		if editor_view == {
 			case .GYM;
@@ -388,7 +395,7 @@ main :: () {
 				}
 			case .WORLD;
 				draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, 0);
-				terrain_draw(cmd_buff, *draw_arenas[frame_index], frame_gpu, viewport_camera.position, default_sampler);
+				terrain_draw(cmd_buff, *draw_arenas[frame_index], frame_gpu, viewport_camera.position, default_sampler, view_mode == .WIREFRAME);
 		}
 
 		gpu_end_render_pass(cmd_buff);

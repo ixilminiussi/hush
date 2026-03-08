@@ -17,11 +17,13 @@ Terrain_Settings :: struct {
 	resolution   : [2]s32 = .[256, 256];
 	chunks       : [2]s32 = .[8, 8];
 	scale        : float32 = 400.0;
-	height_scale : float32 = 20.0;
-	y_offset     : float32 = 5.0;
+	height_scale : float32 = 100.0;
+	y_offset     : float32 = 0.0;
 	lod_levels   : s32 = 4;
 	lod_distance : float32 = 200.0;
-	debug_view   : s32 = 0;
+	threshold    : float32 = 0.8;
+	flat_color   : [3]float32 = .[1., 1., 1.];
+	angle_color  : [3]float32 = .[.5, .5, .5];
 }
 
 // placed objects

@@ -5,7 +5,6 @@ struct VS_Output {
     float4 position : SV_POSITION;
     float2 uv       : TEXCOORD0;
 	float3 color    : COLOR0;
-
 	float4 sm_positions[4];
 	float3 w_ray;
 }

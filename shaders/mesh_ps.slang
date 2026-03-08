@@ -8,7 +8,6 @@ struct PS_Input {
 	float3 position : SV_POSITION;
     float2 uv : TEXCOORD0;
 	float3 color : COLOR0;
-
 	float4 sm_positions[4];
 	float3 w_ray;
 }
@@ -114,7 +113,7 @@ PS_Output main(PS_Input input) {
 	light *= 3.0;
 	const float AMBIENT = 0.4;
 
-	// view modes: 0=shaded, 1=albedo, 2=mesh, 3=csm, 4=id
+	// view modes: 0=shaded, 1=albedo, 2=normal, 3=csm, 4=id, 6=lod
 	if (frame_data.view_mode == 1) {
 		output.color = float4(albedo, 1.);
 		return output;
@@ -142,6 +141,15 @@ PS_Output main(PS_Input input) {
 	}
 	if (frame_data.view_mode == 4) {
 		output.color = output.id;
+		return output;
+	}
+	if (frame_data.view_mode == 5) {
+		output.color = float4(albedo, 1.0);
+		return output;
+	}
+	if (frame_data.view_mode == 6) {
+		// LOD - meshes have no LOD yet, show flat gray
+		output.color = float4(float3(0.5), 1.0);
 		return output;
 	}
 

@@ -8,6 +8,8 @@ View_Mode :: enum s32 {
 	NORMAL;
 	CSM;
 	ID;
+	WIREFRAME;
+	LOD;
 }
 
 VIEW_MODE_NAMES :: #run -> [] string {

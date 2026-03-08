@@ -12,6 +12,6 @@ struct Frame_Data {
 	TextureHandle2D shadow_maps[4]; // only for AFTER shadow_map pass
 
 	float3          sun_direction;
-	int             view_mode; // 0=shaded, 1=albedo, 2=mesh, 3=csm
+	int             view_mode; // 0=shaded, 1=albedo, 2=normal, 3=csm, 4=id, 5=wireframe, 6=lod
 }
 
