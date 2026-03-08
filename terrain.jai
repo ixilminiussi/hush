@@ -67,8 +67,19 @@ terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_g
 
 	gpu_set_pipeline(cmd_buff, ifx wireframe then terrain_wireframe_pipeline else terrain_pipeline);
 
-	chunk_res_x := resolution[0] / chunks[0];
-	chunk_res_y := resolution[1] / chunks[1];
+	// snap chunk resolution so (chunk_res - 1) is divisible by max step,
+	// ensuring LOD grids always reach chunk edges exactly
+	max_step : s32 = 1;
+	for 0..lod_levels-2  max_step *= 2;
+	chunk_res_x := (resolution[0] / chunks[0] - 1) / max_step * max_step + 1;
+	chunk_res_y := (resolution[1] / chunks[1] - 1) / max_step * max_step + 1;
+	if chunk_res_x < max_step + 1 then chunk_res_x = max_step + 1;
+	if chunk_res_y < max_step + 1 then chunk_res_y = max_step + 1;
+
+	// pre-compute LOD for each chunk
+	MAX_CHUNKS :: 16;
+	lod_grid : [MAX_CHUNKS][MAX_CHUNKS]s32;
+	assert(chunks[0] <= MAX_CHUNKS && chunks[1] <= MAX_CHUNKS);
 
 	for cy : 0..chunks[1]-1 {
 		for cx : 0..chunks[0]-1 {
@@ -78,9 +89,22 @@ terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_g
 			dy := camera_position.z - chunk_cy;
 			dist := sqrt(dx*dx + dy*dy);
 
-			lod : s32 = cast(s32)(dist / lod_distance * cast(float32)lod_levels);
-			if lod >= lod_levels then lod = lod_levels - 1;
-			if lod < 0 then lod = 0;
+			l : s32 = cast(s32)(dist / lod_distance * cast(float32)lod_levels);
+			if l >= lod_levels then l = lod_levels - 1;
+			if l < 0 then l = 0;
+			lod_grid[cy][cx] = l;
+		}
+	}
+
+	for cy : 0..chunks[1]-1 {
+		for cx : 0..chunks[0]-1 {
+			lod := lod_grid[cy][cx];
+
+			// neighbor LODs (use own LOD at terrain boundaries so no stitching)
+			lod_neg_x : s32 = ifx cx > 0              then lod_grid[cy][cx-1] else lod;
+			lod_pos_x : s32 = ifx cx < chunks[0] - 1  then lod_grid[cy][cx+1] else lod;
+			lod_neg_y : s32 = ifx cy > 0              then lod_grid[cy-1][cx] else lod;
+			lod_pos_y : s32 = ifx cy < chunks[1] - 1  then lod_grid[cy+1][cx] else lod;
 
 			step : s32 = 1;
 			for 0..lod-1  step *= 2;
@@ -89,7 +113,7 @@ terrain_draw :: (cmd_buff : Gpu_Command_Buffer, draw_arena : *Gpu_Arena, frame_g
 			lod_vertex_count := (lod_res_x - 1) * (lod_res_y - 1) * 6;
 
 			terrain_cpu, terrain_gpu := gpu_arena_alloc(draw_arena, Terrain_VS_Data);
-			terrain_cpu.* = .{frame_gpu, xx heightmap_view, xx sampler, chunk_res_x, chunk_res_y, chunks[0], chunks[1], cx, cy, lod, scale, height_scale, y_offset, threshold, flat_color, angle_color};
+			terrain_cpu.* = .{frame_gpu, xx heightmap_view, xx sampler, chunk_res_x, chunk_res_y, chunks[0], chunks[1], cx, cy, lod, lod_neg_x, lod_pos_x, lod_neg_y, lod_pos_y, scale, height_scale, y_offset, threshold, flat_color, angle_color};
 
 			gpu_draw_instanced(cmd_buff, terrain_gpu, terrain_gpu, xx lod_vertex_count, 1);
 		}
@@ -136,6 +160,10 @@ Terrain_VS_Data :: struct {
 	chunk_x      : s32;
 	chunk_y      : s32;
 	lod          : s32;
+	lod_neg_x    : s32;
+	lod_pos_x    : s32;
+	lod_neg_y    : s32;
+	lod_pos_y    : s32;
 	scale        : float32;
 	height_scale : float32;
 	y_offset     : float32;

@@ -20,6 +20,10 @@ struct Terrain_Data {
     int chunk_x;
     int chunk_y;
     int lod;
+    int lod_neg_x;
+    int lod_pos_x;
+    int lod_neg_y;
+    int lod_pos_y;
     float scale;
     float height_scale;
     float y_offset;
@@ -45,23 +49,27 @@ float4 main(PS_Input input) : SV_TARGET {
 	int total_res_x = res_x * chunks_x;
 	int total_res_y = res_y * chunks_y;
 
-	// texel size in UV space
-	float2 texel = float2(1.0 / float(total_res_x),
-						   1.0 / float(total_res_y));
-	float hL = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(-texel.x, 0)).r;
-	float hR = terrain->heightmap.Sample(terrain->sampler, input.uv + float2( texel.x, 0)).r;
-	float hD = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(0, -texel.y)).r;
-	float hU = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(0,  texel.y)).r;
+	// take neighboring samples at different texel sizes to average normal
+	float3 N = float3(0.0);
+	for (float t = 0.5; t <= 2; t += 0.5) {
+		float2 texel = float2(t / float(total_res_x),
+							   t / float(total_res_y));
+		float hL = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(-texel.x, 0)).r;
+		float hR = terrain->heightmap.Sample(terrain->sampler, input.uv + float2( texel.x, 0)).r;
+		float hD = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(0, -texel.y)).r;
+		float hU = terrain->heightmap.Sample(terrain->sampler, input.uv + float2(0,  texel.y)).r;
 
-	// world-space distances between samples
-	float dx = 2.0 * terrain->scale / float(total_res_x - 1);
-	float dz = 2.0 * terrain->scale / float(total_res_y - 1);
+		// world-space distances between samples
+		float dx = 2.0 * terrain->scale / float(total_res_x - 1);
+		float dz = 2.0 * terrain->scale / float(total_res_y - 1);
 
-	float3 N = normalize(float3(
-	    (hL - hR) * terrain->height_scale / dx,
-		1.0,
-	    (hD - hU) * terrain->height_scale / dz
-	));
+		N += normalize(float3(
+			(hL - hR) * terrain->height_scale / dx,
+			1.0,
+			(hD - hU) * terrain->height_scale / dz
+		));
+	}
+	N = normalize(N);
 
     int view_mode = data.view_mode;
 

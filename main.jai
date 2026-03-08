@@ -214,6 +214,18 @@ main :: () {
 			rotate_viewport_camera(viewport_camera, .{dir.x, -dir.y} * cast(float32)dt, .{0., 1., 0.});
 		}
 
+		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_SPACE) {
+			using viewport_camera;
+			position += UP * dt * MOVE_SPEED;
+			moved = true;
+		}
+
+		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_LSHIFT) {
+			using viewport_camera;
+			position += -UP * dt * MOVE_SPEED;
+			moved = true;
+		}
+
 		if mouse_capture && is_key_down(SDL.SDL_SCANCODE_W) {
 			using viewport_camera;
 			position += look_dir * dt * MOVE_SPEED;

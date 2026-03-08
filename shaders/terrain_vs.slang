@@ -20,6 +20,10 @@ struct Terrain_Data {
     int chunk_x;
     int chunk_y;
     int lod;
+    int lod_neg_x;  
+    int lod_pos_x; 
+    int lod_neg_y;
+    int lod_pos_y;  
     float scale;
     float height_scale;
     float y_offset;
@@ -81,6 +85,46 @@ VS_Output main(uint vertex_id: SV_VertexID) {
     float2 uv = float2((float(chunk_x) + local_fx) / float(chunks_x),
                         (float(chunk_y) + local_fy) / float(chunks_y));
     float height = terrain->heightmap.Sample(terrain->sampler, uv).r;
+
+    // LOD stitching: on chunk edges adjacent to a coarser neighbor,
+    // snap "odd" vertices to linearly interpolated heights to eliminate seams.
+    int ix = quad_x + offset.x;
+    int iy = quad_y + offset.y;
+
+    int4 neighbor_lods = int4(terrain->lod_neg_x, terrain->lod_pos_x, terrain->lod_neg_y, terrain->lod_pos_y);
+    bool4 on_edge = bool4(ix == 0, ix == lod_res_x - 1, iy == 0, iy == lod_res_y - 1);
+    // edges 0,1 stitch along Y (use res_y, local_fy, chunk_y, chunks_y)
+    // edges 2,3 stitch along X (use res_x, local_fx, chunk_x, chunks_x)
+    for (int edge = 0; edge < 4; edge++) {
+        if (!on_edge[edge] || neighbor_lods[edge] <= lod) continue;
+
+        int axis_res   = (edge < 2) ? res_y   : res_x;
+        float local_f  = (edge < 2) ? local_fy : local_fx;
+        int chunk_idx  = (edge < 2) ? chunk_y  : chunk_x;
+        int chunk_count = (edge < 2) ? chunks_y : chunks_x;
+
+        int n_step = 1 << neighbor_lods[edge];
+        int n_res = (axis_res - 1) / n_step + 1;
+        float pos = local_f * float(n_res - 1);
+        int j_lo = int(floor(pos));
+        int j_hi = min(j_lo + 1, n_res - 1);
+        float t = pos - float(j_lo);
+
+        if (t > 0.001) {
+            float f_lo = float(j_lo) / float(n_res - 1);
+            float f_hi = float(j_hi) / float(n_res - 1);
+            float2 uv_lo = uv, uv_hi = uv;
+            if (edge < 2) {
+                uv_lo.y = (float(chunk_idx) + f_lo) / float(chunk_count);
+                uv_hi.y = (float(chunk_idx) + f_hi) / float(chunk_count);
+            } else {
+                uv_lo.x = (float(chunk_idx) + f_lo) / float(chunk_count);
+                uv_hi.x = (float(chunk_idx) + f_hi) / float(chunk_count);
+            }
+            height = lerp(terrain->heightmap.Sample(terrain->sampler, uv_lo).r,
+                          terrain->heightmap.Sample(terrain->sampler, uv_hi).r, t);
+        }
+    }
 
     float3 world_pos = float3(wx, terrain->y_offset - height * terrain->height_scale, wz);
 
