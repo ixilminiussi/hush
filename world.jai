@@ -51,11 +51,11 @@ remove_placed_object :: (index : int) {
 
 world_init :: () {
 	for *viewport_cameras {
-		it.position      = .{5., 0., 0.};
-		it.look_dir      = .{-1., 0., 0.};
-		it.view_distance = 1000;
-		it.fov           = 30.;
-		it.move_speed    = 10.;
+		it.position   = .{5., 0., 0.};
+		it.look_dir   = .{-1., 0., 0.};
+		it.near_plane = 0.1;
+		it.fov        = 30.;
+		it.move_speed = 10.;
 	}
 
 	shadow_map_camera.direction = normalize(Vector3.{-1.0, -0.5, 0.3});

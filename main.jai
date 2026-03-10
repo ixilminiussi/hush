@@ -151,7 +151,8 @@ main :: () {
 		update_projection(it, cast(float32)width / cast(float32)height);
 		update_view(it);
 	}
-	build_cascade_splits(*shadow_map_camera, viewport_cameras[xx editor_view].view_distance, 0.9); // same view distance for all for now. be careful if that changes
+	max_shadow_distance :: 1000.0;
+	build_cascade_splits(*shadow_map_camera, max_shadow_distance, 0.97);
 
 	last_time := seconds_since_init();
 
@@ -328,10 +329,10 @@ main :: () {
 					case .GYM;
 						if current_gym_index >= 0 {
 							active_gym := loaded_gltfs[current_gym_index].scene;
-							draw_node(cmd_buff, active_gym, *draw_arenas[frame_index], frame_gpu, Matrix4_Identity, xx i);
+							draw_node(cmd_buff, active_gym, *draw_arenas[frame_index], frame_gpu, Matrix4_Identity, min(lod_override, LOD_LEVELS - 1), xx i);
 						}
 					case .WORLD;
-						draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, xx i);
+						draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, min(lod_override, LOD_LEVELS - 1), xx i);
 				}
 
 				gpu_end_render_pass(cmd_buff);
@@ -370,10 +371,10 @@ main :: () {
 				case .GYM;
 					if current_gym_index >= 0 {
 						active_gym := loaded_gltfs[current_gym_index].scene;
-						draw_node(cmd_buff, active_gym, *draw_arenas[frame_index], frame_gpu, Matrix4_Identity, 0);
+						draw_node(cmd_buff, active_gym, *draw_arenas[frame_index], frame_gpu, Matrix4_Identity, lod_override); // TODO: make it distance based
 					}
 				case .WORLD;
-					draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, 0);
+					draw_placed_objects(cmd_buff, placed_objects, *draw_arenas[frame_index], frame_gpu, lod_override); // TODO: make it distance based
 			}
 
 			gpu_end_render_pass(cmd_buff);

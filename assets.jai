@@ -227,7 +227,9 @@ render_object_thumbnail :: (node : Node, pipeline : Gpu_Pipeline, queue : Gpu_Qu
 
 // --- drawing (GPU commands for nodes) ---
 
-draw_placed_objects :: (cmd_buff : Gpu_Command_Buffer, placed_objects : [..]Placed_Object, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, lod : u32) {
+draw_placed_objects :: (cmd_buff : Gpu_Command_Buffer, placed_objects : [..]Placed_Object, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, mesh_lod : u32, shadow_map_index : s32 = -1) {
+	assert(mesh_lod < LOD_LEVELS);
+
 	for placed_object : placed_objects {
 		object_data := pool_get(object_pool, placed_object.object);
 		if object_data == null || object_data.node == 0 then continue;
@@ -251,11 +253,12 @@ draw_placed_objects :: (cmd_buff : Gpu_Command_Buffer, placed_objects : [..]Plac
 						Draw_Data :: struct {
 							pointers : [2] Gpu_Ptr;
 							model    : Matrix4;
-							lod      : u32;
+							mesh_lod : u32;
+							shadow_map_index : s32;
 						}
 						draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Draw_Data);
 						if draw_cpu == null then continue;
-						draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], model, lod};
+						draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], model, mesh_lod, shadow_map_index};
 
 						Material_Pair :: struct {
 							material   : Gpu_Ptr;
@@ -266,10 +269,10 @@ draw_placed_objects :: (cmd_buff : Gpu_Command_Buffer, placed_objects : [..]Plac
 						if pixel_cpu == null then continue;
 						pixel_cpu.* = Material_Pair.{primitive.material, frame_data, xx cast(s64)object_data.node};
 
-						if primitive.index_count == 0 {
+						if primitive.index_count[mesh_lod] == 0 {
 							gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
 						} else {
-							gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+							gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu[mesh_lod], primitive.index_count[mesh_lod], 1);
 						}
 					}
 				}
@@ -279,7 +282,9 @@ draw_placed_objects :: (cmd_buff : Gpu_Command_Buffer, placed_objects : [..]Plac
 	}
 }
 
-draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, world_transform : Matrix4, lod : u32) {
+draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Arena, frame_data : Gpu_Ptr, world_transform : Matrix4, mesh_lod : u32, shadow_map_index : s32 = -1) {
+	assert(mesh_lod < LOD_LEVELS);
+	
 	node_data := pool_get(node_pool, node);
 	if node_data == null return;
 
@@ -293,11 +298,12 @@ draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Aren
 			Draw_Data :: struct {
 				pointers : [2] Gpu_Ptr;
 				model    : Matrix4;
-				lod      : u32;
+				mesh_lod : u32;
+				shadow_map_index : s32;
 			}
 			draw_cpu, draw_gpu := gpu_arena_alloc(draw_arena, Draw_Data);
 			if draw_cpu == null then continue;
-			draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], transform, lod};
+			draw_cpu.* = Draw_Data.{.[primitive.vertex_gpu, frame_data], transform, mesh_lod, shadow_map_index};
 
 			Material_Pair :: struct {
 				material   : Gpu_Ptr;
@@ -308,16 +314,16 @@ draw_node :: (cmd_buff : Gpu_Command_Buffer, node : Node, draw_arena : *Gpu_Aren
 			if pixel_cpu == null then continue;
 			pixel_cpu.* = Material_Pair.{primitive.material, frame_data, xx cast(s64)node_data.object_id};
 
-			if primitive.index_count == 0 {
+			if primitive.index_count[mesh_lod] == 0 {
 				gpu_draw_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.vertex_count, 1);
 			} else {
-				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu, primitive.index_count, 1);
+				gpu_draw_indexed_instanced(cmd_buff, draw_gpu, pixel_gpu, primitive.index_gpu[mesh_lod], primitive.index_count[mesh_lod], 1);
 			}
 		}
 	}
 
 	for child : node_data.children {
-		draw_node(cmd_buff, child, draw_arena, frame_data, transform, lod);
+		draw_node(cmd_buff, child, draw_arena, frame_data, transform, mesh_lod, shadow_map_index);
 	}
 }
 
@@ -387,7 +393,7 @@ find_node_by_gltf_index :: (root : Node, gltf_node_index : s32) -> Node {
 
 // --- import ---
 
-import_gltf :: (filepath : string) -> bool, Node {
+import_gltf :: (filepath : string, generate_lod := true) -> bool, Node {
 	log("importing %...", filepath);
 
 	options : cgltf_options;
@@ -463,13 +469,15 @@ import_gltf :: (filepath : string) -> bool, Node {
 
 			vertex_count = cast(u32)position_accessor.count;
 
-			if primitive_cgltf.indices != null then index_count = cast(u32)primitive_cgltf.indices.count;
+			if primitive_cgltf.indices != null then index_count[0] = cast(u32)primitive_cgltf.indices.count;
 
 			total_vertex_count += vertex_count;
-			total_index_count  += index_count;
+			total_index_count  += index_count[0];
 
 			vertices, vertex_gpu= := gpu_arena_array_alloc(*gpu_arena, Vertex, xx vertex_count);
-			indices,  index_gpu=  := gpu_arena_array_alloc(*gpu_arena, u32,    xx index_count);
+			indices,  lod0_gpu    := gpu_arena_array_alloc(*gpu_arena, u32,    xx index_count[0]);
+
+			index_gpu[0] = lod0_gpu;
 
 			if vertices.data == null || indices.data == null {
 				log("asset_manager: error allocating memory, ran out of size\n");
@@ -497,8 +505,27 @@ import_gltf :: (filepath : string) -> bool, Node {
 				vertices[it] = vertex;
 			}
 
-			for 0..index_count-1 {
+			for 0..index_count[0]-1 {
 				indices[it] = cast(u32)cgltf_accessor_read_index(primitive_cgltf.indices, cast(u32)it);
+			}
+
+			{
+				prev_indices      := indices;
+				prev_error_target := 0.01;
+
+				for 1..LOD_LEVELS-1 {
+					if generate_lod {
+						t_indices := NewArray(index_count[it-1], u32);
+						index_count[it] = xx meshopt_simplify(t_indices.data, prev_indices.data, index_count[it-1], xx vertices.data, vertex_count, size_of(Vertex), xx max(4, index_count[it-1] / 2), pow(xx prev_error_target, 2.0), meshopt_SimplifyLockBorder | meshopt_SimplifyPrune | meshopt_SimplifyRegularize, *prev_error_target); // TODO: profile this with more agressive meshes
+						// TODO: retrieve the "actual error" to decide LOD range..? 
+
+						s_indices, new_lod := gpu_arena_array_alloc(*gpu_arena, u32, xx index_count[it]);
+						index_gpu[it] = new_lod;
+						s_indices = t_indices;
+					} else {
+						index_gpu[it]  = index_gpu[0];
+					}
+				}
 			}
 		}
 
@@ -718,9 +745,9 @@ thumbnail_arena     : Gpu_Arena;
 Primitive :: struct {
 	vertex_gpu     : Gpu_Ptr;
 
-	index_gpu      : Gpu_Ptr;
+	index_gpu      : [LOD_LEVELS]Gpu_Ptr;
 
-	index_count    : u32;
+	index_count    : [LOD_LEVELS]u32;
 	vertex_count   : u32;
 
 	material : Gpu_Ptr;
@@ -1067,6 +1094,7 @@ result_to_string :: (result : cgltf_result) -> string {
 #import "Process";
 
 #load "pool.jai";
+#import "meshoptimizer";
 
 #scope_export
 

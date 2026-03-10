@@ -19,6 +19,8 @@ struct Draw_Data {
 	Vertex* vertex_buffer;
 	Frame_Data* frame_data;
 	float4x4 model;
+	int mesh_lod;
+	int shadow_map_index;
 }
 
 [vk::push_constant]

@@ -10,6 +10,7 @@ struct PS_Input {
 	float3 color : COLOR0;
 	float4 sm_positions[4];
 	float3 w_ray;
+	int mesh_lod;
 }
 
 struct Material_Data {
@@ -148,8 +149,17 @@ PS_Output main(PS_Input input) {
 		return output;
 	}
 	if (frame_data.view_mode == 6) {
-		// LOD - meshes have no LOD yet, show flat gray
-		output.color = float4(float3(0.5), 1.0);
+		float3 lod_colors[8] = {
+			float3(0.0, 1.0, 0.0),
+			float3(1.0, 1.0, 0.0),
+			float3(1.0, 0.5, 0.0),
+			float3(1.0, 0.0, 0.0),
+			float3(0.5, 0.0, 0.5),
+			float3(0.0, 0.0, 1.0),
+			float3(0.0, 1.0, 1.0),
+			float3(1.0, 1.0, 1.0)
+		};
+		output.color = float4(lod_colors[clamp(input.mesh_lod, 0, 7)], 1.0);
 		return output;
 	}
 

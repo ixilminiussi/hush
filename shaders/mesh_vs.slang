@@ -7,6 +7,7 @@ struct VS_Output {
 	float3 color    : COLOR0;
 	float4 sm_positions[4];
 	float3 w_ray;
+	int mesh_lod;
 }
 
 struct Vertex {
@@ -21,6 +22,8 @@ struct Draw_Data {
 	Vertex* vertex_buffer;
 	Frame_Data* frame_data;
 	float4x4 model;
+	int mesh_lod;
+	int shadow_map_index;
 }
 
 [vk::push_constant]
@@ -45,6 +48,8 @@ VS_Output main(uint vertex_id: SV_VertexID) {
 	for (int i = 0; i < 4; i ++) {
 		output.sm_positions[i] = mul(frame_data.sun_view_projections[i], float4(w_position, 1.0));
 	}
-	
+
+	output.mesh_lod = sp.get().mesh_lod;
+
     return output;
 }

@@ -75,7 +75,7 @@ float4 main(PS_Input input) : SV_TARGET {
 
 	float flatness = dot(N, float3(0., 1., 0.));
 	flatness = smoothstep(terrain.threshold, 1., flatness);
-	float3 albedo = lerp(terrain.angle_color, terrain.flat_color, flatness);
+	float3 albedo = flatness < 0.5 ? terrain.angle_color : terrain.flat_color;
 
     float NdotL = max(dot(N, -data->sun_direction), 0.0);
     float ambient = 0.15;

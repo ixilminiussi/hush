@@ -1,5 +1,6 @@
 // Rendering types and constants
 
+LOD_LEVELS :: 3;
 SHADOW_MAP_SPLIT_COUNT :: 4;
 
 View_Mode :: enum s32 {

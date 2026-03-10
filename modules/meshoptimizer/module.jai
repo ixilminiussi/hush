@@ -175,3 +175,4 @@ meshopt_setAllocator :: (allocate: #type (size: u64) -> *void, deallocate: #type
 #scope_file
 
 meshoptlib :: #library,no_dll "meshoptimizer";
+lgcc_s :: #library,system,link_always "libgcc_s";

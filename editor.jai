@@ -7,6 +7,8 @@ Editor_View :: enum u8 {
 
 editor_view := Editor_View.WORLD;
 
+lod_override : u32 = 0;
+
 show_gym            := true;
 show_object_library := true;
 show_terrain        := true;
@@ -58,6 +60,11 @@ editor_draw :: (pipeline : Gpu_Pipeline, queue : Gpu_Queue, width : s32, height 
 		avail := ImGui.GetContentRegionAvail().x;
 		status_width := ImGui.CalcTextSize(to_c_string(status_text)).x;
 		view_label_width : float = 100.0;
+
+		lod_width : float = 80.0;
+		ImGui.SetCursorPosX(avail - status_width - view_label_width - lod_width - 30);
+		ImGui.SetNextItemWidth(lod_width);
+		ImGui.SliderInt("##lod", xx *lod_override, 0, LOD_LEVELS - 1);
 
 		ImGui.SetCursorPosX(avail - status_width - view_label_width - 20);
 		ImGui.TextDisabled(status_text);

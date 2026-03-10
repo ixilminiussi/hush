@@ -6,11 +6,11 @@ Camera :: struct {
 Viewport_Camera :: struct {
 	using camera  : Camera;
 
-	position      : Vector3;
-	look_dir      : Vector3;
-	fov           : float;
-	view_distance : float;
-	move_speed    : float;
+	position   : Vector3;
+	look_dir   : Vector3;
+	fov        : float;
+	near_plane : float;
+	move_speed : float;
 }
 
 update_view :: (using viewport_camera : *Viewport_Camera) {
@@ -18,7 +18,7 @@ update_view :: (using viewport_camera : *Viewport_Camera) {
 }
 
 update_projection :: (using viewport_camera : *Viewport_Camera, aspect_ratio : float) {
-	projection = make_reverse_z_infinite_projection(fov, aspect_ratio, view_distance * NEAR_FAR_RATIO);
+	projection = make_reverse_z_infinite_projection(fov, aspect_ratio, near_plane);
 }
 
 // orbit_viewport_camera :: (using viewport_camera : *Viewport_Camera, direction : Vector2, up : Vector3) {
